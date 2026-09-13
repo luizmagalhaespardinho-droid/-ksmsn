@@ -313,28 +313,69 @@ function mapBoxToRegions(geometry, frontRegion, backRegion){
   uv.needsUpdate = true;
 }
 
-// Projeta o molde num cilindro (cada peça de roupa vira um "tubo" em volta
-// do torso/braço/perna) em vez de mapear numa caixa reta — assim a textura
-// enrola no corpo do boneco (metade da volta = frente, metade = costas),
-// em vez de ficar esticada numa placa chapada flutuando na frente dele.
-function mapCylinderToRegions(geometry, frontRegion, backRegion){
-  geometry.computeBoundingBox();
-  const bb = geometry.boundingBox;
-  const pos = geometry.attributes.position;
-  const uv = geometry.attributes.uv;
-  const p = new THREE.Vector3();
-  for(let i = 0; i < pos.count; i++){
-    p.fromBufferAttribute(pos, i);
-    const isBack = p.z < 0;
-    const region = isBack ? backRegion : frontRegion;
-    let xFrac = (bb.max.x - bb.min.x) > 0 ? (p.x - bb.min.x) / (bb.max.x - bb.min.x) : 0.5;
-    if(isBack) xFrac = 1 - xFrac; // de costas, esquerda/direita inverte
-    const yFrac = (bb.max.y - bb.min.y) > 0 ? (p.y - bb.min.y) / (bb.max.y - bb.min.y) : 0.5;
-    const u = region.x0 + xFrac * (region.x1 - region.x0);
-    const v = 1 - (region.y0 + yFrac * (region.y1 - region.y0));
-    uv.setXY(i, u, v);
+// Constrói o "tubo" (torso/braço/perna) como DUAS metades de casca
+// independentes (frente = ângulo 0..π, costas = ângulo π..2π), cada uma
+// com seu próprio conjunto de vértices soldado apenas na POSIÇÃO com a
+// outra metade nas duas costuras laterais — não no UV.
+//
+// Isso corrige o bug real do bug anterior (mapCylinderToRegions por
+// vértice num cilindro de peça única): nas duas costuras laterais, um
+// triângulo tinha um vértice pintado com a região FRENTE do atlas e o
+// vértice vizinho com a região COSTAS — como as duas regiões ficam em
+// pontos totalmente diferentes da textura (585×559), o GPU interpola
+// linearmente ENTRE elas dentro do triângulo, esticando um retalho de
+// pixel de um lado ao outro do atlas e pintando uma faixa/mancha
+// distorcida bem na lateral do boneco (exatamente o efeito de "bigode"/
+// faixa esticada nas fotos). Com metades separadas isso não existe mais:
+// cada triângulo só referencia UV dentro de UMA região do atlas.
+function buildTexturedTube(radialSegments, height, frontRegion, backRegion){
+  const halfSegs = Math.max(2, Math.round(radialSegments / 2));
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+
+  function addHalf(angleStart, angleEnd, region, isBack){
+    const startIndex = positions.length / 3;
+    for(let iy = 0; iy <= 1; iy++){
+      const yFrac = iy; // 0 = base, 1 = topo
+      const y = (yFrac - 0.5) * height;
+      const vRegion = region.y0 + yFrac * (region.y1 - region.y0);
+      const v = 1 - vRegion;
+      for(let ix = 0; ix <= halfSegs; ix++){
+        const t = ix / halfSegs;
+        const angle = angleStart + t * (angleEnd - angleStart);
+        const x = Math.cos(angle);
+        const z = Math.sin(angle);
+        positions.push(x, y, z);
+        let xFrac = (x + 1) / 2; // -1..1 -> 0..1
+        if(isBack) xFrac = 1 - xFrac; // de costas, esquerda/direita inverte
+        const u = region.x0 + xFrac * (region.x1 - region.x0);
+        uvs.push(u, v);
+      }
+    }
+    for(let ix = 0; ix < halfSegs; ix++){
+      const a = startIndex + ix;
+      const b = startIndex + ix + 1;
+      const c = startIndex + (halfSegs + 1) + ix;
+      const d = startIndex + (halfSegs + 1) + ix + 1;
+      indices.push(a, b, c,  b, d, c);
+    }
   }
-  uv.needsUpdate = true;
+
+  // Frente: ângulo 0 -> π cobre x:+1 -> -1 com z>=0 (mesma faixa de x do
+  // boneco inteiro, só que sempre do lado de fora, z positivo).
+  addHalf(0, Math.PI, frontRegion, false);
+  // Costas: ângulo π -> 2π cobre x:-1 -> +1 com z<=0. As duas pontas
+  // (θ=0/2π e θ=π) coincidem EM POSIÇÃO com as pontas da metade da frente
+  // — é isso que fecha o tubo visualmente sem soldar o UV.
+  addHalf(Math.PI, Math.PI * 2, backRegion, true);
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
 }
 
 // ---------- Cena ----------
@@ -413,11 +454,11 @@ let clothingBoxes = { torso:null, armL:null, armR:null, legL:null, legR:null };
 // Materiais persistentes — mantidos entre trocas de boneco, pra roupa já
 // carregada continuar aplicada quando o usuário troca de rig.
 const NEUTRAL_SHIRT = 0x2c2f35, NEUTRAL_PANTS = 0x24262b;
-const shirtMat = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85 });
-const armMatL  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85 });
-const armMatR  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85 });
-const pantsMatL = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85 });
-const pantsMatR = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85 });
+const shirtMat = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85, side: THREE.DoubleSide });
+const armMatL  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85, side: THREE.DoubleSide });
+const armMatR  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85, side: THREE.DoubleSide });
+const pantsMatL = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85, side: THREE.DoubleSide });
+const pantsMatR = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85, side: THREE.DoubleSide });
 
 // Só ficam visíveis depois que o usuário carrega um molde — antes disso o
 // boneco fica limpo, sem nenhuma caixa cobrindo o corpo (esse era o bug:
@@ -489,8 +530,7 @@ function buildClothingForBox(box){
 
   const torsoHalfW = halfW * 0.62;
   const torsoRadiusZ = depth * 0.42;
-  const torsoGeo = new THREE.CylinderGeometry(1, 1, torsoH, 20, 1, true);
-  mapCylinderToRegions(torsoGeo, REGIONS.torsoFront, REGIONS.torsoBack);
+  const torsoGeo = buildTexturedTube(20, torsoH, REGIONS.torsoFront, REGIONS.torsoBack);
   const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.scale.set(torsoHalfW, 1, torsoRadiusZ);
   torso.position.set(0, (waistY + shoulderY) / 2, 0);
@@ -498,15 +538,13 @@ function buildClothingForBox(box){
 
   const armRadius = halfW * 0.155;
   const armH = torsoH * 1.02;
-  const armGeoL = new THREE.CylinderGeometry(1, 1, armH, 14, 1, true);
-  mapCylinderToRegions(armGeoL, REGIONS.rightArmFront, REGIONS.rightArmBack);
+  const armGeoL = buildTexturedTube(14, armH, REGIONS.rightArmFront, REGIONS.rightArmBack);
   const armL = new THREE.Mesh(armGeoL, armMatL);
   armL.scale.set(armRadius, 1, armRadius);
   armL.position.set(-(torsoHalfW + armRadius), (waistY + shoulderY) / 2, 0);
   armL.visible = shirtLoaded;
 
-  const armGeoR = new THREE.CylinderGeometry(1, 1, armH, 14, 1, true);
-  mapCylinderToRegions(armGeoR, REGIONS.leftArmFront, REGIONS.leftArmBack);
+  const armGeoR = buildTexturedTube(14, armH, REGIONS.leftArmFront, REGIONS.leftArmBack);
   const armR = new THREE.Mesh(armGeoR, armMatR);
   armR.scale.set(armRadius, 1, armRadius);
   armR.position.set(torsoHalfW + armRadius, (waistY + shoulderY) / 2, 0);
@@ -515,15 +553,13 @@ function buildClothingForBox(box){
   const legRadius = halfW * 0.32;
   const legH = waistY - minY;
   const legCenterX = legRadius + halfW * 0.06;
-  const legGeoL = new THREE.CylinderGeometry(1, 1, legH, 14, 1, true);
-  mapCylinderToRegions(legGeoL, REGIONS.rightArmFront, REGIONS.rightArmBack);
+  const legGeoL = buildTexturedTube(14, legH, REGIONS.rightArmFront, REGIONS.rightArmBack);
   const legL = new THREE.Mesh(legGeoL, pantsMatL);
   legL.scale.set(legRadius, 1, depth * 0.34);
   legL.position.set(-legCenterX, minY + legH / 2, 0);
   legL.visible = pantsLoaded;
 
-  const legGeoR = new THREE.CylinderGeometry(1, 1, legH, 14, 1, true);
-  mapCylinderToRegions(legGeoR, REGIONS.leftArmFront, REGIONS.leftArmBack);
+  const legGeoR = buildTexturedTube(14, legH, REGIONS.leftArmFront, REGIONS.leftArmBack);
   const legR = new THREE.Mesh(legGeoR, pantsMatR);
   legR.scale.set(legRadius, 1, depth * 0.34);
   legR.position.set(legCenterX, minY + legH / 2, 0);

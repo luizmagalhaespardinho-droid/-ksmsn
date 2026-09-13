@@ -297,85 +297,121 @@ const REGIONS = {
   leftArmDown:    { x0: 0.526, x1: 0.634, y0: 0.868, y1: 0.980 },
 };
 
-function setFaceUV(uvAttr, faceIndex, region){
-  const u0 = region.x0, u1 = region.x1;
-  const v0 = 1 - region.y1, v1 = 1 - region.y0;
-  const base = faceIndex * 4;
-  uvAttr.setXY(base + 0, u0, v1);
-  uvAttr.setXY(base + 1, u1, v1);
-  uvAttr.setXY(base + 2, u0, v0);
-  uvAttr.setXY(base + 3, u1, v0);
-}
-// faceIndex do BoxGeometry: 0=+x 1=-x 2=+y 3=-y 4=+z(frente) 5=-z(costas)
-function mapBoxToRegions(geometry, frontRegion, backRegion){
-  const uv = geometry.attributes.uv;
-  for(let f = 0; f < 6; f++) setFaceUV(uv, f, f === 5 ? backRegion : frontRegion);
-  uv.needsUpdate = true;
-}
-
-// Constrói o "tubo" (torso/braço/perna) como DUAS metades de casca
-// independentes (frente = ângulo 0..π, costas = ângulo π..2π), cada uma
-// com seu próprio conjunto de vértices soldado apenas na POSIÇÃO com a
-// outra metade nas duas costuras laterais — não no UV.
+// ---------- Roupa colada na malha REAL do boneco ----------
+// Em vez de gerar uma caixa/tubo genérico do tamanho aproximado do membro,
+// a gente pega a malha de verdade daquela parte (torso/braço/perna, do
+// próprio .obj do rig) e usa ELA como casco da roupa — cada rig mantém a
+// sua silhueta exata (o Blocky fica com canto de 90°, o Man/Woman ficam
+// com a forma arredondada/afunilada deles), sem precisar aproximar por
+// nenhuma forma primitiva.
 //
-// Isso corrige o bug real do bug anterior (mapCylinderToRegions por
-// vértice num cilindro de peça única): nas duas costuras laterais, um
-// triângulo tinha um vértice pintado com a região FRENTE do atlas e o
-// vértice vizinho com a região COSTAS — como as duas regiões ficam em
-// pontos totalmente diferentes da textura (585×559), o GPU interpola
-// linearmente ENTRE elas dentro do triângulo, esticando um retalho de
-// pixel de um lado ao outro do atlas e pintando uma faixa/mancha
-// distorcida bem na lateral do boneco (exatamente o efeito de "bigode"/
-// faixa esticada nas fotos). Com metades separadas isso não existe mais:
-// cada triângulo só referencia UV dentro de UMA região do atlas.
-function buildTexturedTube(radialSegments, height, frontRegion, backRegion){
-  const halfSegs = Math.max(2, Math.round(radialSegments / 2));
-  const positions = [];
-  const uvs = [];
-  const indices = [];
+// O pulo do gato: as posições dos vértices dos 6 objetos ("o obj1..obj6")
+// de um mesmo .obj já vivem no MESMO espaço compartilhado (o braço já
+// nasce deslocado em x, não tem transform local por peça). Então dá pra
+// clonar a malha da parte, esticar ela um pouco pra fora (pra ficar por
+// cima da pele, não colada nela) e pendurar o resultado como filho do
+// MESMO grupo que já tem o upFix/rotação do rig — sem reprocessar
+// nenhuma coordenada manualmente.
+//
+// UV: convertida pra non-indexed (cada triângulo com vértices próprios,
+// sem compartilhar entre regiões — mesmo cuidado de antes pra não vazar
+// UV) e cada triângulo é classificado pela normal da própria face real:
+// olha pra frente (y>0 no espaço bruto do .obj) → região "Front"; olha
+// pra trás → "Back"; face de topo/base perto da borda da peça (ombro,
+// topo da perna) → "Up"/"Down" quando a peça tiver essas regiões.
+function buildShellFromPart(sourceGeometry, regions, opts = {}){
+  const outwardXY = opts.outwardXY ?? 1.07; // infla só em x/y (largura/profundidade), mantém a altura exata
+  const capFrac = opts.capFrac ?? 0.08;     // % do topo/base tratado como tampa (Up/Down)
 
-  function addHalf(angleStart, angleEnd, region, isBack){
-    const startIndex = positions.length / 3;
-    for(let iy = 0; iy <= 1; iy++){
-      const yFrac = iy; // 0 = base, 1 = topo
-      const y = (yFrac - 0.5) * height;
-      const vRegion = region.y0 + yFrac * (region.y1 - region.y0);
-      const v = 1 - vRegion;
-      for(let ix = 0; ix <= halfSegs; ix++){
-        const t = ix / halfSegs;
-        const angle = angleStart + t * (angleEnd - angleStart);
-        const x = Math.cos(angle);
-        const z = Math.sin(angle);
-        positions.push(x, y, z);
-        let xFrac = (x + 1) / 2; // -1..1 -> 0..1
-        if(isBack) xFrac = 1 - xFrac; // de costas, esquerda/direita inverte
-        const u = region.x0 + xFrac * (region.x1 - region.x0);
-        uvs.push(u, v);
-      }
-    }
-    for(let ix = 0; ix < halfSegs; ix++){
-      const a = startIndex + ix;
-      const b = startIndex + ix + 1;
-      const c = startIndex + (halfSegs + 1) + ix;
-      const d = startIndex + (halfSegs + 1) + ix + 1;
-      indices.push(a, b, c,  b, d, c);
-    }
+  const geo = sourceGeometry.index ? sourceGeometry.toNonIndexed() : sourceGeometry.clone();
+  const srcPos = geo.attributes.position;
+
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox;
+  const minX = bb.min.x, maxX = bb.max.x;
+  const minY = bb.min.y, maxY = bb.max.y; // eixo de profundidade (frente/costas) no .obj bruto
+  const minZ = bb.min.z, maxZ = bb.max.z; // eixo de altura no .obj bruto
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const rangeX = (maxX - minX) || 1, rangeY = (maxY - minY) || 1, rangeZ = (maxZ - minZ) || 1;
+  const topCut = maxZ - rangeZ * capFrac, bottomCut = minZ + rangeZ * capFrac;
+
+  const outPositions = [];
+  const outUVs = [];
+  const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
+  const eab = new THREE.Vector3(), eac = new THREE.Vector3(), faceNormal = new THREE.Vector3();
+
+  function mapUV(region, uFrac, vFrac){
+    const u = region.x0 + THREE.MathUtils.clamp(uFrac, 0, 1) * (region.x1 - region.x0);
+    const vRegion = region.y0 + THREE.MathUtils.clamp(vFrac, 0, 1) * (region.y1 - region.y0);
+    return [u, 1 - vRegion];
   }
 
-  // Frente: ângulo 0 -> π cobre x:+1 -> -1 com z>=0 (mesma faixa de x do
-  // boneco inteiro, só que sempre do lado de fora, z positivo).
-  addHalf(0, Math.PI, frontRegion, false);
-  // Costas: ângulo π -> 2π cobre x:-1 -> +1 com z<=0. As duas pontas
-  // (θ=0/2π e θ=π) coincidem EM POSIÇÃO com as pontas da metade da frente
-  // — é isso que fecha o tubo visualmente sem soldar o UV.
-  addHalf(Math.PI, Math.PI * 2, backRegion, true);
+  const triCount = srcPos.count / 3;
+  for(let t = 0; t < triCount; t++){
+    const i0 = t * 3, i1 = i0 + 1, i2 = i0 + 2;
+    va.fromBufferAttribute(srcPos, i0);
+    vb.fromBufferAttribute(srcPos, i1);
+    vc.fromBufferAttribute(srcPos, i2);
+    eab.subVectors(vb, va); eac.subVectors(vc, va);
+    faceNormal.crossVectors(eab, eac).normalize();
+    const centerZ = (va.z + vb.z + vc.z) / 3;
+    const centerY = (va.y + vb.y + vc.y) / 3;
 
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geo.setIndex(indices);
-  geo.computeVertexNormals();
-  return geo;
+    let region, useCap = false;
+    const hasCaps = !!(regions.up && regions.down);
+    if(hasCaps && Math.abs(faceNormal.z) > Math.max(Math.abs(faceNormal.y), Math.abs(faceNormal.x)) &&
+       (centerZ >= topCut || centerZ <= bottomCut)){
+      useCap = true;
+      region = centerZ >= topCut ? regions.up : regions.down;
+    } else {
+      region = centerY >= 0 ? regions.front : regions.back;
+    }
+
+    [va, vb, vc].forEach(v => {
+      // infla só em x/y (mantém a altura z como está, pra bater com a
+      // costura entre camisa/calça e com a borda da peça de verdade)
+      const px = cx + (v.x - cx) * outwardXY;
+      const py = cy + (v.y - cy) * outwardXY;
+      outPositions.push(px, py, v.z);
+      if(useCap){
+        outUVs.push(...mapUV(region, (v.x - minX) / rangeX, (v.y - minY) / rangeY));
+      } else {
+        outUVs.push(...mapUV(region, (v.x - minX) / rangeX, (v.z - minZ) / rangeZ));
+      }
+    });
+  }
+
+  const outGeo = new THREE.BufferGeometry();
+  outGeo.setAttribute('position', new THREE.Float32BufferAttribute(outPositions, 3));
+  outGeo.setAttribute('uv', new THREE.Float32BufferAttribute(outUVs, 2));
+  outGeo.computeVertexNormals();
+  return outGeo;
+}
+
+// Acha, dentro do grupo carregado do .obj, qual malha é a cabeça, o
+// torso, os 2 braços e as 2 pernas — sem depender de nome (o OBJLoader
+// só numera "obj1".."obj6"), usando só a geometria: a cabeça é sempre a
+// parte mais alta; pernas são as 2 mais baixas; torso é quem sobra mais
+// perto do centro (x≈0); braços são os 2 restantes, um de cada lado.
+function classifyRigParts(loadedObj){
+  const meshes = loadedObj.children.filter(o => o.isMesh);
+  const info = meshes.map(mesh => {
+    mesh.geometry.computeBoundingBox();
+    const bb = mesh.geometry.boundingBox;
+    return { mesh, cx: (bb.min.x + bb.max.x) / 2, cz: (bb.min.z + bb.max.z) / 2 };
+  });
+  info.sort((a, b) => b.cz - a.cz);
+  const head = info[0];
+  const rest = info.slice(1).sort((a, b) => a.cz - b.cz);
+  const legs = rest.slice(0, 2);
+  const remaining = rest.slice(2).sort((a, b) => Math.abs(a.cx) - Math.abs(b.cx));
+  const torso = remaining[0];
+  const arms = remaining.slice(1);
+  const legLeft  = legs.find(p => p.cx > 0) || legs[0];   // x>0 no .obj bruto = lado esquerdo na tela (upFix inverte x)
+  const legRight = legs.find(p => p.cx <= 0) || legs[1];
+  const armLeft  = arms.find(p => p.cx > 0) || arms[0];
+  const armRight = arms.find(p => p.cx <= 0) || arms[1];
+  return { head: head.mesh, torso: torso.mesh, armLeft: armLeft.mesh, armRight: armRight.mesh, legLeft: legLeft.mesh, legRight: legRight.mesh };
 }
 
 // ---------- Cena ----------
@@ -506,77 +542,58 @@ function loadRigTemplate(rig){
 
 function tintRig(obj, toneHex){
   obj.traverse(o => {
-    if(o.isMesh) o.material = new THREE.MeshStandardMaterial({ color: toneHex, metalness:0.05, roughness:0.75 });
+    if(o.isMesh && !o.userData.isClothing) o.material = new THREE.MeshStandardMaterial({ color: toneHex, metalness:0.05, roughness:0.75 });
   });
 }
 
 function disposeClothingBoxes(){
-  Object.values(clothingBoxes).forEach(m => { if(m){ avatarGroup.remove(m); m.geometry.dispose(); } });
+  Object.values(clothingBoxes).forEach(m => { if(m){ if(m.parent) m.parent.remove(m); m.geometry.dispose(); } });
   clothingBoxes = { torso:null, armL:null, armR:null, legL:null, legR:null };
 }
 
-// Tubos (cilindros) encostados uns nos outros, ajustados ao corpo do
-// boneco — formam um "casco" contínuo (torso · braço esq. · braço dir.,
-// e perna esq. · perna dir.) que envolve o corpo, em vez de caixas retas
-// soltas na frente dele.
-function buildClothingForBox(box){
-  const size = box.getSize(new THREE.Vector3());
-  const minY = box.min.y;
-  const H = size.y, halfW = size.x / 2, depth = size.z;
+// Constrói a roupa direto em cima da malha real do rig (torso/braço/
+// perna extraídos do próprio .obj) — ver buildShellFromPart/
+// classifyRigParts acima. `innerGroup` é o grupo que já tem o upFix
+// aplicado (mesmo nível dos meshes do corpo): penduramos a roupa nele
+// pra herdar exatamente a mesma transform do boneco, sem reprocessar
+// nenhuma coordenada.
+function buildClothingFromRig(innerGroup){
+  const parts = classifyRigParts(innerGroup);
 
-  const waistY = minY + H * 0.50;
-  const shoulderY = minY + H * 0.87;
-  const torsoH = shoulderY - waistY;
-
-  // Constantes medidas direto nos 7 arquivos .obj (Blocky/Man/Woman/Girl/
-  // Boy/Superhero/2.0): fração de "halfW" (metade da LARGURA TOTAL do
-  // boneco, ombro a ombro) ocupada pelo torso, braço e perna de cada um,
-  // com uma margem de segurança em cima do maior valor encontrado.
-  // Isso resolve o bug real: o raio do braço (0.155) e a profundidade do
-  // torso (baseada em "depth" — a profundidade da caixa do boneco INTEIRO,
-  // que varia de 0.6x a 0.88x o halfW dependendo do boneco, então ora
-  // acertava ora ficava pequena demais) ficavam menores que o braço/torso
-  // de verdade — a manga e boa parte da camisa nasciam ENTERRADAS dentro
-  // do boneco (por trás/dentro da malha dele) e só apareciam onde a malha
-  // do boneco tinha uma folga (o decote), daí a faixa fina que você via.
-  const torsoHalfW = halfW * 0.60;
-  const torsoRadiusZ = halfW * 0.46;
-  const torsoGeo = buildTexturedTube(20, torsoH, REGIONS.torsoFront, REGIONS.torsoBack);
+  const torsoGeo = buildShellFromPart(parts.torso.geometry,
+    { front: REGIONS.torsoFront, back: REGIONS.torsoBack, up: REGIONS.torsoUp, down: REGIONS.torsoDown });
   const torso = new THREE.Mesh(torsoGeo, shirtMat);
-  torso.scale.set(torsoHalfW, 1, torsoRadiusZ);
-  torso.position.set(0, (waistY + shoulderY) / 2, 0);
+  torso.userData.isClothing = true;
   torso.visible = shirtLoaded;
 
-  const armCenterX = halfW * 0.75;
-  const armRadius = halfW * 0.33;
-  const armH = torsoH * 1.02;
-  const armGeoL = buildTexturedTube(14, armH, REGIONS.rightArmFront, REGIONS.rightArmBack);
+  const armGeoL = buildShellFromPart(parts.armLeft.geometry,
+    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack, up: REGIONS.rightArmUp, down: REGIONS.rightArmDown });
   const armL = new THREE.Mesh(armGeoL, armMatL);
-  armL.scale.set(armRadius, 1, armRadius);
-  armL.position.set(-armCenterX, (waistY + shoulderY) / 2, 0);
+  armL.userData.isClothing = true;
   armL.visible = shirtLoaded;
 
-  const armGeoR = buildTexturedTube(14, armH, REGIONS.leftArmFront, REGIONS.leftArmBack);
+  const armGeoR = buildShellFromPart(parts.armRight.geometry,
+    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack, up: REGIONS.leftArmUp, down: REGIONS.leftArmDown });
   const armR = new THREE.Mesh(armGeoR, armMatR);
-  armR.scale.set(armRadius, 1, armRadius);
-  armR.position.set(armCenterX, (waistY + shoulderY) / 2, 0);
+  armR.userData.isClothing = true;
   armR.visible = shirtLoaded;
 
-  const legRadius = halfW * 0.40;
-  const legCenterX = halfW * 0.27;
-  const legH = waistY - minY;
-  const legGeoL = buildTexturedTube(14, legH, REGIONS.rightArmFront, REGIONS.rightArmBack);
+  // Pernas não têm região "Up/Down" própria no molde (reaproveitam a
+  // mesma tira do braço, igual já era antes) — sem `up`/`down` o
+  // buildShellFromPart cai direto no front/back pra toda a peça.
+  const legGeoL = buildShellFromPart(parts.legLeft.geometry,
+    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack });
   const legL = new THREE.Mesh(legGeoL, pantsMatL);
-  legL.scale.set(legRadius, 1, legRadius);
-  legL.position.set(-legCenterX, minY + legH / 2, 0);
+  legL.userData.isClothing = true;
   legL.visible = pantsLoaded;
 
-  const legGeoR = buildTexturedTube(14, legH, REGIONS.leftArmFront, REGIONS.leftArmBack);
+  const legGeoR = buildShellFromPart(parts.legRight.geometry,
+    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack });
   const legR = new THREE.Mesh(legGeoR, pantsMatR);
-  legR.scale.set(legRadius, 1, legRadius);
-  legR.position.set(legCenterX, minY + legH / 2, 0);
+  legR.userData.isClothing = true;
   legR.visible = pantsLoaded;
 
+  [torso, armL, armR, legL, legR].forEach(m => innerGroup.add(m));
   return { torso, armL, armR, legL, legR };
 }
 
@@ -616,10 +633,11 @@ async function selectRig(rig){
     tintRig(rigInstance, currentSkin);
     avatarGroup.add(rigInstance);
 
-    const box = new THREE.Box3().setFromObject(rigInstance);
-    clothingBoxes = buildClothingForBox(box);
-    Object.values(clothingBoxes).forEach(m => avatarGroup.add(m));
+    // innerGroup = grupo com o upFix (mesmo nível dos meshes do corpo)
+    const innerGroup = rigInstance.children[0];
+    clothingBoxes = buildClothingFromRig(innerGroup);
 
+    const box = new THREE.Box3().setFromObject(rigInstance);
     const size = box.getSize(new THREE.Vector3());
     DEFAULT_TARGET = new THREE.Vector3(0, size.y * 0.55, 0);
     DEFAULT_CAM_POS = new THREE.Vector3(0, size.y * 0.62, size.y * 1.7);

@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Preview Station — Clothes Preview</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root{
+    --bg: #0c0d0f;
+    --bg-panel: #121317f0;
+    --line: #232529;
+    --ink: #e8e6e1;
+    --ink-dim: #83868c;
+    --amber: #e39a3a;
+    --teal: #5eead4;
+    --app-height: 100vh;
+  }
+  *{ box-sizing:border-box; }
+  html, body{
+    margin:0; padding:0; overflow:hidden;
+    height:100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family:'Space Grotesk', sans-serif;
+  }
+  #app{ position:relative; width:100%; height: var(--app-height); }
+  #viewport{ position:absolute; inset:0; }
+  #viewport canvas{ display:block; touch-action:none; }
+
+  .corner{
+    position:fixed; top:22px; left:26px; z-index:5;
+    font-family:'IBM Plex Mono', monospace; font-size:11px; color: var(--ink-dim);
+    pointer-events:none;
+  }
+  .brand{ font-weight:700; font-size:16px; color: var(--ink); letter-spacing:-.01em; text-decoration:none; pointer-events:auto; }
+  .brand span{ color: var(--amber); }
+  .corner-right{
+    position:fixed; top:22px; right:26px; z-index:5;
+    font-family:'IBM Plex Mono', monospace; font-size:10px; color: var(--teal);
+    letter-spacing:.06em; text-align:right;
+  }
+
+  #hint{
+    position:fixed; top:80px; left:50%; transform:translateX(-50%);
+    font-family:'IBM Plex Mono', monospace; font-size:11px; color: var(--ink-dim);
+    text-align:center; z-index:4; pointer-events:none; max-width:320px; line-height:1.6;
+  }
+  #loading{
+    position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    font-family:'IBM Plex Mono', monospace; font-size:11px; color: var(--teal);
+    z-index:4; display:none; letter-spacing:.06em;
+  }
+  #loading.active{ display:block; }
+
+  #panel{
+    position:fixed; left:0; right:0; bottom:0; z-index:6;
+    background: var(--bg-panel);
+    backdrop-filter: blur(6px);
+    border-top:1px solid var(--line);
+    padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+    display:flex; flex-direction:column; gap:10px;
+    max-height:64vh; overflow-y:auto;
+  }
+
+  .section-label{
+    font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; color: var(--ink-dim);
+  }
+
+  .pill-row{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .pill{
+    font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.04em;
+    background:transparent; color: var(--ink-dim); border:1px solid var(--line);
+    padding:7px 10px; cursor:pointer; transition: border-color .15s, color .15s;
+  }
+  .pill:hover{ border-color: var(--amber); color: var(--amber); }
+  .pill.on{ border-color: var(--teal); color: var(--teal); }
+
+  .slot-row{ display:flex; gap:10px; }
+  .slot{
+    flex:1; display:flex; flex-direction:column; gap:6px;
+    border:1px dashed var(--line); padding:10px; text-align:center;
+  }
+  .slot.filled{ border-style:solid; border-color: var(--teal); }
+  .slot .slot-label{ font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:.06em; color: var(--ink-dim); }
+  .slot .slot-file{ font-size:12px; color: var(--ink); min-height:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .slot-btns{ display:flex; gap:6px; }
+  .btn{
+    flex:1;
+    font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.04em;
+    background:transparent; color: var(--ink); border:1px solid var(--line);
+    padding:8px 6px; cursor:pointer; transition: border-color .15s, color .15s;
+  }
+  .btn:hover{ border-color: var(--amber); color: var(--amber); }
+  .btn.wide{ flex: none; padding:9px 14px; }
+
+  .row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .skin-bar{ display:flex; gap:5px; }
+  .skin-swatch{
+    width:22px; height:22px; border-radius:50%; border:1px solid var(--line);
+    cursor:pointer;
+  }
+  .skin-swatch.on{ border-color: var(--teal); box-shadow:0 0 0 2px rgba(94,234,212,.25); }
+
+  .footer-row{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+  .note{ font-family:'IBM Plex Mono', monospace; font-size:9.5px; color: var(--ink-dim); line-height:1.5; max-width:520px; }
+
+  input[type=file]{ display:none; }
+
+  @media (max-width:480px){
+    .slot-row{ flex-direction:column; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="viewport"></div>
+</div>
+
+<div class="corner"><a class="brand" href="index.html">PREVIEW<span>_STATION</span></a></div>
+<div class="corner-right">CLOTHES PREVIEW<br>· ROBLOX</div>
+<div id="hint">Solte ou carregue o molde da camisa e/ou da calça (585×559) pra ver no boneco.</div>
+<div id="loading">CARREGANDO BONECO…</div>
+
+<div id="panel">
+  <div>
+    <span class="section-label">BONECO</span>
+    <div class="pill-row" id="rig-bar"></div>
+  </div>
+
+  <div class="slot-row">
+    <div class="slot" id="slot-shirt">
+      <span class="slot-label">CAMISA (TORSO + BRAÇOS)</span>
+      <span class="slot-file" id="shirt-file">—</span>
+      <div class="slot-btns">
+        <button class="btn" id="btn-load-shirt">CARREGAR</button>
+        <button class="btn" id="btn-clear-shirt">LIMPAR</button>
+        <button class="btn" id="btn-guide-shirt">MOLDE GUIA</button>
+      </div>
+    </div>
+    <div class="slot" id="slot-pants">
+      <span class="slot-label">CALÇA (PERNAS)</span>
+      <span class="slot-file" id="pants-file">—</span>
+      <div class="slot-btns">
+        <button class="btn" id="btn-load-pants">CARREGAR</button>
+        <button class="btn" id="btn-clear-pants">LIMPAR</button>
+        <button class="btn" id="btn-guide-pants">MOLDE GUIA</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-row">
+    <div class="row">
+      <span class="slot-label" style="color:var(--ink-dim);">PELE</span>
+      <div class="skin-bar" id="skin-bar"></div>
+    </div>
+    <button class="btn wide" id="btn-reset-view">RESETAR CÂMERA</button>
+  </div>
+
+  <p class="note">Prévia aproximada: o molde é dividido em 3 colunas (braço/perna esq. · torso · braço/perna dir.) e 2 linhas (frente em cima · costas embaixo), seguindo o padrão 585×559 do Roblox, e a roupa é ajustada como uma camada por cima do boneco escolhido — os rigs não têm UV própria, então a roupa não "gruda" no relevo do modelo, só na proporção do corpo. Pode haver diferenças em relação ao Studio oficial — use "MOLDE GUIA" pra baixar um gabarito com as regiões marcadas.</p>
+</div>
+
+<input type="file" id="input-shirt" accept="image/*">
+<input type="file" id="input-pants" accept="image/*">
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+
+function setAppHeight(){ document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`); }
+setAppHeight();
+window.addEventListener('resize', setAppHeight);
+window.addEventListener('orientationchange', setAppHeight);
+
+// ---------- Regiões do molde clássico (frações 0..1, espaço de imagem: x=esq->dir, y=topo->baixo) ----------
+const COL_SIDE = 128 / 585;
+const COL_MID_END = 457 / 585;
+const REGIONS = {
+  leftFront:  { x0: 0,            x1: COL_SIDE,    y0: 0,   y1: 0.5 },
+  leftBack:   { x0: 0,            x1: COL_SIDE,    y0: 0.5, y1: 1 },
+  midFront:   { x0: COL_SIDE,     x1: COL_MID_END, y0: 0,   y1: 0.5 },
+  midBack:    { x0: COL_SIDE,     x1: COL_MID_END, y0: 0.5, y1: 1 },
+  rightFront: { x0: COL_MID_END,  x1: 1,           y0: 0,   y1: 0.5 },
+  rightBack:  { x0: COL_MID_END,  x1: 1,           y0: 0.5, y1: 1 },
+};
+
+function setFaceUV(uvAttr, faceIndex, region){
+  const u0 = region.x0, u1 = region.x1;
+  const v0 = 1 - region.y1, v1 = 1 - region.y0;
+  const base = faceIndex * 4;
+  uvAttr.setXY(base + 0, u0, v1);
+  uvAttr.setXY(base + 1, u1, v1);
+  uvAttr.setXY(base + 2, u0, v0);
+  uvAttr.setXY(base + 3, u1, v0);
+}
+// faceIndex do BoxGeometry: 0=+x 1=-x 2=+y 3=-y 4=+z(frente) 5=-z(costas)
+function mapBoxToRegions(geometry, frontRegion, backRegion){
+  const uv = geometry.attributes.uv;
+  for(let f = 0; f < 6; f++) setFaceUV(uv, f, f === 5 ? backRegion : frontRegion);
+  uv.needsUpdate = true;
+}
+
+// ---------- Cena ----------
+const viewportEl = document.getElementById('viewport');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0c0d0f);
+
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.05, 50);
+let DEFAULT_CAM_POS = new THREE.Vector3(0, 1.35, 3.4);
+let DEFAULT_TARGET = new THREE.Vector3(0, 1.05, 0);
+camera.position.copy(DEFAULT_CAM_POS);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+viewportEl.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.copy(DEFAULT_TARGET);
+controls.minDistance = 1.2;
+controls.maxDistance = 7;
+controls.maxPolarAngle = Math.PI * 0.92;
+controls.update();
+
+scene.add(new THREE.HemisphereLight(0xdfe7ff, 0x15171b, 1.1));
+const key = new THREE.DirectionalLight(0xffffff, 1.6);
+key.position.set(2.2, 3.4, 2.6);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xbfd4ff, 0.5);
+fill.position.set(-2.4, 1.6, -1.8);
+scene.add(fill);
+
+const grid = new THREE.GridHelper(6, 24, 0x2a2d33, 0x1a1c20);
+scene.add(grid);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ---------- Rigs reais (os mesmos .obj usados no UGC Preview) ----------
+const ROBLOX_RIGS = [
+  { key:'blocky',    label:'BLOCKY',    file:'rigs/Starter_Blocky_Rig.obj' },
+  { key:'2.0',       label:'2.0',       file:'rigs/Starter_2.0_Rig.obj' },
+  { key:'boy',       label:'BOY',       file:'rigs/Starter_Boy_Rig.obj' },
+  { key:'girl',      label:'GIRL',      file:'rigs/Starter_Girl_Rig.obj' },
+  { key:'man',       label:'MAN',       file:'rigs/Starter_Man_Rig.obj' },
+  { key:'woman',     label:'WOMAN',     file:'rigs/Starter_Woman_Rig.obj' },
+  { key:'superhero', label:'SUPERHERO', file:'rigs/Starter_Superhero_Rig.obj' },
+];
+const SKIN_TONES = [0xffe0bd, 0xe5b887, 0xc68642, 0x9c6644, 0x6b3b1f, 0x4a2e22];
+let currentSkin = SKIN_TONES[0];
+
+const rigTemplates = {}; // cache dos .obj já normalizados
+const avatarGroup = new THREE.Group();
+scene.add(avatarGroup);
+let rigInstance = null;
+let clothingBoxes = { torso:null, armL:null, armR:null, legL:null, legR:null };
+
+// Materiais persistentes — mantidos entre trocas de boneco, pra roupa já
+// carregada continuar aplicada quando o usuário troca de rig.
+const NEUTRAL_SHIRT = 0x2c2f35, NEUTRAL_PANTS = 0x24262b;
+const shirtMat = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85 });
+const armMatL  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85 });
+const armMatR  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85 });
+const pantsMatL = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85 });
+const pantsMatR = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85 });
+
+function normalizeRigObject(obj){
+  const box1 = new THREE.Box3().setFromObject(obj);
+  const size1 = box1.getSize(new THREE.Vector3());
+  const targetHeight = 2.0;
+  const scale = size1.y > 0 ? targetHeight / size1.y : 1;
+  obj.scale.setScalar(scale);
+  obj.updateMatrixWorld(true);
+  const box2 = new THREE.Box3().setFromObject(obj);
+  const center2 = box2.getCenter(new THREE.Vector3());
+  obj.position.x -= center2.x;
+  obj.position.z -= center2.z;
+  obj.position.y -= box2.min.y;
+  obj.updateMatrixWorld(true);
+}
+
+function loadRigTemplate(rig){
+  if(rigTemplates[rig.key]) return Promise.resolve(rigTemplates[rig.key]);
+  return new Promise((resolve, reject) => {
+    const loader = new OBJLoader();
+    loader.load(rig.file, (loadedObj) => {
+      const upFix = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+      loadedObj.quaternion.copy(upFix);
+      const obj = new THREE.Group();
+      obj.add(loadedObj);
+      obj.updateMatrixWorld(true);
+      normalizeRigObject(obj);
+      rigTemplates[rig.key] = obj;
+      resolve(obj);
+    }, undefined, reject);
+  });
+}
+
+function tintRig(obj, toneHex){
+  obj.traverse(o => {
+    if(o.isMesh) o.material = new THREE.MeshStandardMaterial({ color: toneHex, metalness:0.05, roughness:0.75 });
+  });
+}
+
+function disposeClothingBoxes(){
+  Object.values(clothingBoxes).forEach(m => { if(m){ avatarGroup.remove(m); m.geometry.dispose(); } });
+  clothingBoxes = { torso:null, armL:null, armR:null, legL:null, legR:null };
+}
+
+function buildClothingForBox(box){
+  const size = box.getSize(new THREE.Vector3());
+  const minY = box.min.y;
+  const H = size.y, halfW = size.x / 2, depth = size.z;
+
+  // Proporções genéricas de um corpo humano em pé (o rig não traz ossos
+  // nomeados, então estimamos cintura/ombro a partir da altura total —
+  // mesma lógica de proporção usada no encaixe de acessórios do UGC Preview).
+  const waistY = minY + H * 0.50;
+  const shoulderY = minY + H * 0.87;
+
+  const torsoGeo = new THREE.BoxGeometry(halfW * 2.06, shoulderY - waistY, depth * 1.08);
+  mapBoxToRegions(torsoGeo, REGIONS.midFront, REGIONS.midBack);
+  const torso = new THREE.Mesh(torsoGeo, shirtMat);
+  torso.position.set(0, (waistY + shoulderY) / 2, 0);
+
+  const armW = halfW * 0.42, armH = (shoulderY - waistY) * 1.05;
+  const armGeoL = new THREE.BoxGeometry(armW, armH, depth * 0.8);
+  mapBoxToRegions(armGeoL, REGIONS.leftFront, REGIONS.leftBack);
+  const armL = new THREE.Mesh(armGeoL, armMatL);
+  armL.position.set(-(halfW * 1.05 + armW / 2), (waistY + shoulderY) / 2, 0);
+
+  const armGeoR = new THREE.BoxGeometry(armW, armH, depth * 0.8);
+  mapBoxToRegions(armGeoR, REGIONS.rightFront, REGIONS.rightBack);
+  const armR = new THREE.Mesh(armGeoR, armMatR);
+  armR.position.set(halfW * 1.05 + armW / 2, (waistY + shoulderY) / 2, 0);
+
+  const legW = halfW * 0.82, legH = waistY - minY;
+  const legGeoL = new THREE.BoxGeometry(legW, legH, depth * 0.92);
+  mapBoxToRegions(legGeoL, REGIONS.leftFront, REGIONS.leftBack);
+  const legL = new THREE.Mesh(legGeoL, pantsMatL);
+  legL.position.set(-halfW * 0.45, minY + legH / 2, 0);
+
+  const legGeoR = new THREE.BoxGeometry(legW, legH, depth * 0.92);
+  mapBoxToRegions(legGeoR, REGIONS.rightFront, REGIONS.rightBack);
+  const legR = new THREE.Mesh(legGeoR, pantsMatR);
+  legR.position.set(halfW * 0.45, minY + legH / 2, 0);
+
+  return { torso, armL, armR, legL, legR };
+}
+
+const loadingEl = document.getElementById('loading');
+const rigBarEl = document.getElementById('rig-bar');
+let loadToken = 0;
+
+async function selectRig(rig){
+  const token = ++loadToken;
+  [...rigBarEl.children].forEach((el, i) => el.classList.toggle('on', ROBLOX_RIGS[i].key === rig.key));
+  loadingEl.classList.add('active');
+  try{
+    const template = await loadRigTemplate(rig);
+    if(token !== loadToken) return; // usuário já trocou de boneco de novo
+    if(rigInstance){ avatarGroup.remove(rigInstance); }
+    disposeClothingBoxes();
+
+    rigInstance = template.clone(true);
+    tintRig(rigInstance, currentSkin);
+    avatarGroup.add(rigInstance);
+
+    const box = new THREE.Box3().setFromObject(rigInstance);
+    clothingBoxes = buildClothingForBox(box);
+    Object.values(clothingBoxes).forEach(m => avatarGroup.add(m));
+
+    const size = box.getSize(new THREE.Vector3());
+    DEFAULT_TARGET = new THREE.Vector3(0, size.y * 0.55, 0);
+    DEFAULT_CAM_POS = new THREE.Vector3(0, size.y * 0.62, size.y * 1.7);
+    camera.position.copy(DEFAULT_CAM_POS);
+    controls.target.copy(DEFAULT_TARGET);
+    controls.update();
+  } catch(err){
+    console.error('Erro ao carregar o boneco:', err);
+  } finally {
+    if(token === loadToken) loadingEl.classList.remove('active');
+  }
+}
+
+function applySkin(hex){
+  currentSkin = hex;
+  if(rigInstance) tintRig(rigInstance, hex);
+}
+
+// ---------- UI: seletor de boneco ----------
+ROBLOX_RIGS.forEach((rig, i) => {
+  const btn = document.createElement('button');
+  btn.className = 'pill' + (i === 0 ? ' on' : '');
+  btn.textContent = rig.label;
+  btn.addEventListener('click', () => selectRig(rig));
+  rigBarEl.appendChild(btn);
+});
+selectRig(ROBLOX_RIGS[0]);
+
+// ---------- UI: pele ----------
+const skinBarEl = document.getElementById('skin-bar');
+SKIN_TONES.forEach((hex, i) => {
+  const el = document.createElement('div');
+  el.className = 'skin-swatch' + (i === 0 ? ' on' : '');
+  el.style.background = '#' + hex.toString(16).padStart(6, '0');
+  el.addEventListener('click', () => {
+    applySkin(hex);
+    [...skinBarEl.children].forEach((c, ci) => c.classList.toggle('on', ci === i));
+  });
+  skinBarEl.appendChild(el);
+});
+
+// ---------- Upload de moldes ----------
+const inputShirt = document.getElementById('input-shirt');
+const inputPants = document.getElementById('input-pants');
+const shirtFileEl = document.getElementById('shirt-file');
+const pantsFileEl = document.getElementById('pants-file');
+const slotShirtEl = document.getElementById('slot-shirt');
+const slotPantsEl = document.getElementById('slot-pants');
+const hintEl = document.getElementById('hint');
+
+function loadTextureFromFile(file, onLoad){
+  const url = URL.createObjectURL(file);
+  new THREE.TextureLoader().load(url, (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    onLoad(tex);
+    URL.revokeObjectURL(url);
+  });
+}
+
+function applyShirtFile(file){
+  loadTextureFromFile(file, (tex) => {
+    [shirtMat, armMatL, armMatR].forEach(m => { m.map = tex; m.color.setHex(0xffffff); m.needsUpdate = true; });
+  });
+  shirtFileEl.textContent = file.name;
+  slotShirtEl.classList.add('filled');
+  hintEl.style.display = 'none';
+}
+function applyPantsFile(file){
+  loadTextureFromFile(file, (tex) => {
+    [pantsMatL, pantsMatR].forEach(m => { m.map = tex; m.color.setHex(0xffffff); m.needsUpdate = true; });
+  });
+  pantsFileEl.textContent = file.name;
+  slotPantsEl.classList.add('filled');
+  hintEl.style.display = 'none';
+}
+function clearShirt(){
+  [shirtMat, armMatL, armMatR].forEach(m => { m.map = null; m.color.setHex(NEUTRAL_SHIRT); m.needsUpdate = true; });
+  shirtFileEl.textContent = '—';
+  slotShirtEl.classList.remove('filled');
+  inputShirt.value = '';
+}
+function clearPants(){
+  [pantsMatL, pantsMatR].forEach(m => { m.map = null; m.color.setHex(NEUTRAL_PANTS); m.needsUpdate = true; });
+  pantsFileEl.textContent = '—';
+  slotPantsEl.classList.remove('filled');
+  inputPants.value = '';
+}
+
+document.getElementById('btn-load-shirt').addEventListener('click', () => inputShirt.click());
+document.getElementById('btn-load-pants').addEventListener('click', () => inputPants.click());
+document.getElementById('btn-clear-shirt').addEventListener('click', clearShirt);
+document.getElementById('btn-clear-pants').addEventListener('click', clearPants);
+inputShirt.addEventListener('change', (e) => { if(e.target.files[0]) applyShirtFile(e.target.files[0]); });
+inputPants.addEventListener('change', (e) => { if(e.target.files[0]) applyPantsFile(e.target.files[0]); });
+
+document.getElementById('btn-reset-view').addEventListener('click', () => {
+  camera.position.copy(DEFAULT_CAM_POS);
+  controls.target.copy(DEFAULT_TARGET);
+  controls.update();
+});
+
+// ---------- Drag & drop na viewport ----------
+['dragover', 'drop'].forEach(evt => viewportEl.addEventListener(evt, (e) => e.preventDefault()));
+viewportEl.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files && e.dataTransfer.files[0];
+  if(!file || !file.type.startsWith('image/')) return;
+  const name = file.name.toLowerCase();
+  if(name.includes('pant') || name.includes('cal')){
+    applyPantsFile(file);
+  } else if(slotShirtEl.classList.contains('filled')){
+    applyPantsFile(file);
+  } else {
+    applyShirtFile(file);
+  }
+});
+
+// ---------- Molde guia (gabarito 585x559 com as regiões marcadas) ----------
+function drawGuide(kind){
+  const W = 585, H = 559;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#141519';
+  ctx.fillRect(0, 0, W, H);
+
+  const labels = kind === 'shirt'
+    ? { leftFront:'BRAÇO ESQ · FRENTE', leftBack:'BRAÇO ESQ · COSTAS', midFront:'TORSO · FRENTE', midBack:'TORSO · COSTAS', rightFront:'BRAÇO DIR · FRENTE', rightBack:'BRAÇO DIR · COSTAS' }
+    : { leftFront:'PERNA ESQ · FRENTE', leftBack:'PERNA ESQ · COSTAS', midFront:'(NÃO USADO)', midBack:'(NÃO USADO)', rightFront:'PERNA DIR · FRENTE', rightBack:'PERNA DIR · COSTAS' };
+  const colors = { leftFront:'#5eead4', leftBack:'#3fb8a8', midFront:'#e39a3a', midBack:'#b97a29', rightFront:'#5eead4', rightBack:'#3fb8a8' };
+
+  Object.keys(REGIONS).forEach((k) => {
+    const r = REGIONS[k];
+    const x = r.x0 * W, y = r.y0 * H, w = (r.x1 - r.x0) * W, h = (r.y1 - r.y0) * H;
+    ctx.strokeStyle = colors[k]; ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    ctx.fillStyle = colors[k]; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(labels[k], x + w / 2, y + h / 2, w - 8);
+  });
+  ctx.strokeStyle = '#393c42'; ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+
+  const a = document.createElement('a');
+  a.href = canvas.toDataURL('image/png');
+  a.download = `molde-guia-${kind}-585x559.png`;
+  a.click();
+}
+document.getElementById('btn-guide-shirt').addEventListener('click', () => drawGuide('shirt'));
+document.getElementById('btn-guide-pants').addEventListener('click', () => drawGuide('pants'));
+</script>
+</body>
+</html>

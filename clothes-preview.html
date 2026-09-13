@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Preview Station — Clothes Preview</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root{
+    --bg: #0c0d0f;
+    --bg-panel: #121317f0;
+    --line: #232529;
+    --ink: #e8e6e1;
+    --ink-dim: #83868c;
+    --amber: #e39a3a;
+    --teal: #5eead4;
+    --danger: #e2604f;
+    --app-height: 100vh;
+  }
+  *{ box-sizing:border-box; }
+  html, body{
+    margin:0; padding:0; overflow:hidden;
+    height:100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family:'Space Grotesk', sans-serif;
+  }
+  #app{ position:relative; width:100%; height: var(--app-height); }
+  #viewport{ position:absolute; inset:0; }
+  #viewport canvas{ display:block; touch-action:none; }
+
+  .corner{
+    position:fixed; top:22px; left:26px; z-index:5;
+    font-family:'IBM Plex Mono', monospace; font-size:11px; color: var(--ink-dim);
+    pointer-events:none;
+  }
+  .brand{ font-weight:700; font-size:16px; color: var(--ink); letter-spacing:-.01em; text-decoration:none; pointer-events:auto; }
+  .brand span{ color: var(--amber); }
+  .corner-right{
+    position:fixed; top:22px; right:26px; z-index:5;
+    font-family:'IBM Plex Mono', monospace; font-size:10px; color: var(--teal);
+    letter-spacing:.06em; text-align:right;
+  }
+
+  #hint{
+    position:fixed; top:80px; left:50%; transform:translateX(-50%);
+    font-family:'IBM Plex Mono', monospace; font-size:11px; color: var(--ink-dim);
+    text-align:center; z-index:4; pointer-events:none; max-width:320px; line-height:1.6;
+  }
+  #loading{
+    position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    font-family:'IBM Plex Mono', monospace; font-size:11px; color: var(--teal);
+    z-index:4; display:none; letter-spacing:.06em;
+  }
+  #loading.active{ display:block; }
+
+  /* ---------- ERROR TOAST ---------- */
+  #error-toast{
+    position:fixed; bottom:26px; left:50%; transform: translateX(-50%) translateY(12px);
+    z-index:30;
+    background: var(--bg-panel);
+    border:1px solid var(--danger);
+    color: var(--ink);
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+    padding: 12px 16px;
+    border-radius:2px;
+    opacity:0;
+    pointer-events:none;
+    transition: opacity .25s ease, transform .25s ease;
+    max-width: 80vw;
+  }
+  #error-toast.show{ opacity:1; transform: translateX(-50%) translateY(0); pointer-events:auto; }
+  #error-toast b{ color: var(--danger); font-weight:500; }
+
+  /* ---------- MENU (mesmo padrão das 3 barrinhas do visualizador/roblox) ---------- */
+  #btn-menu{
+    position:fixed; bottom:22px; right:26px; z-index:16;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+    width:38px; height:38px;
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    cursor:pointer;
+  }
+  #btn-menu span{ display:block; width:16px; height:1px; background: var(--ink-dim); transition: background .15s ease; }
+  #btn-menu:hover span{ background: var(--ink); }
+  #btn-menu.open{ border-color:#393c42; }
+  #btn-menu.open span{ background: var(--amber); }
+
+  #panel{
+    position:fixed; bottom:70px; right:26px; z-index:15;
+    display:none; flex-direction:column; gap:6px;
+    pointer-events:none;
+  }
+  #panel.open{ display:flex; pointer-events:auto; }
+
+  .ctrl-btn{
+    font-family:'IBM Plex Mono', monospace; font-size:11px;
+    color: var(--ink-dim);
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    padding: 8px 12px;
+    cursor:pointer; text-align:left;
+    min-width: 188px;
+    transition: color .15s ease, border-color .15s ease;
+  }
+  .ctrl-btn:hover{ color: var(--ink); border-color:#393c42; }
+  .ctrl-btn.on{ color: var(--amber); border-color: var(--amber); }
+
+  /* ---------- painéis flutuantes (boneco / camisa / calça) ---------- */
+  #boneco-panel, #camisa-panel, #calca-panel{
+    position:fixed; bottom:70px; right:26px; z-index:17;
+    width:250px;
+    max-height: calc(var(--app-height) * 0.7);
+    overflow-y:auto;
+    background: var(--bg-panel);
+    backdrop-filter: blur(6px);
+    border:1px solid var(--line);
+    padding:16px;
+    display:none;
+    flex-direction:column;
+    gap:16px;
+  }
+  #boneco-panel.active, #camisa-panel.active, #calca-panel.active{ display:flex; }
+
+  .env-header{
+    display:flex; align-items:center; justify-content:space-between;
+    font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:.04em;
+    color: var(--ink-dim);
+    border-bottom:1px solid var(--line); padding-bottom:10px;
+  }
+  .env-header button{
+    background:none; border:none; color:var(--ink-dim);
+    cursor:pointer; font-size:13px; padding:0 2px; line-height:1;
+  }
+  .env-header button:hover{ color: var(--ink); }
+
+  .env-section{ display:flex; flex-direction:column; gap:9px; }
+  .env-label{ font-family:'IBM Plex Mono', monospace; font-size:10px; color: var(--ink-dim); letter-spacing:.03em; }
+
+  .char-bar{ display:flex; gap:8px; flex-wrap:wrap; }
+  .char-btn{
+    width:42px; height:42px; border-radius:50%;
+    background: var(--bg-panel);
+    border: 1px solid var(--line);
+    cursor:pointer; font-size:19px; line-height:1;
+    display:flex; align-items:center; justify-content:center; padding:0;
+    transition: border-color .15s ease, transform .15s ease;
+  }
+  .char-btn:hover{ border-color:#393c42; transform: translateY(-1px); }
+  .char-btn.on{ border-color: var(--amber); background: rgba(227,154,58,0.12); }
+
+  .rig-loading{
+    font-family:'IBM Plex Mono', monospace; font-size:10px; color: var(--ink-dim);
+    display:none;
+  }
+  .rig-loading.active{ display:block; }
+
+  .skin-bar{ display:flex; gap:5px; flex-wrap:wrap; }
+  .skin-swatch{
+    width:22px; height:22px; border-radius:50%;
+    border:2px solid var(--line);
+    cursor:pointer; padding:0;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+  }
+  .skin-swatch.on{ border-color: var(--teal); box-shadow:0 0 0 2px rgba(94,234,212,.25); }
+
+  .slot-file{ font-size:12px; color: var(--ink); min-height:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .slot-btns{ display:flex; gap:6px; }
+  .btn{
+    flex:1;
+    font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:.04em;
+    background:transparent; color: var(--ink); border:1px solid var(--line);
+    padding:8px 6px; cursor:pointer; transition: border-color .15s, color .15s;
+  }
+  .btn:hover{ border-color: var(--amber); color: var(--amber); }
+  .note{ font-family:'IBM Plex Mono', monospace; font-size:9.5px; color: var(--ink-dim); line-height:1.5; }
+
+  input[type=file]{ display:none; }
+
+  @media (max-width: 680px){
+    .corner{ font-size:10px; }
+    .brand{ font-size:14px; }
+    #btn-menu{ bottom:16px; right:16px; }
+    #panel{ bottom:64px; right:16px; }
+    #boneco-panel, #camisa-panel, #calca-panel{
+      top:auto; left:16px; right:16px; bottom:16px;
+      width:auto;
+      max-height: calc(var(--app-height) * 0.58);
+    }
+    #error-toast{ font-size:11px; padding:10px 14px; bottom:16px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="viewport"></div>
+</div>
+
+<div class="corner"><a class="brand" href="index.html">PREVIEW<span>_STATION</span></a></div>
+<div class="corner-right">CLOTHES PREVIEW<br>· ROBLOX</div>
+<div id="hint">Abra o menu (☰) pra escolher o boneco e carregar o molde da camisa e/ou da calça (585×559).</div>
+<div id="loading">CARREGANDO BONECO…</div>
+<div id="error-toast"><b>ERRO —</b> <span id="error-text"></span></div>
+
+<button id="btn-menu" title="Menu" aria-label="Abrir menu">
+  <span></span><span></span><span></span>
+</button>
+
+<div id="panel">
+  <button class="ctrl-btn" id="btn-boneco">PERSONALIZAR BONECO</button>
+  <button class="ctrl-btn" id="btn-camisa">CAMISA (TORSO + BRAÇOS)</button>
+  <button class="ctrl-btn" id="btn-calca">CALÇA (PERNAS)</button>
+  <button class="ctrl-btn" id="btn-reset-view">RESETAR CÂMERA</button>
+</div>
+
+<div id="boneco-panel">
+  <div class="env-header"><span>PERSONALIZAR BONECO</span><button id="boneco-close">✕</button></div>
+  <div class="env-section">
+    <div class="env-label">MODELO DE BONECO</div>
+    <div class="char-bar" id="rig-bar"></div>
+    <div class="rig-loading" id="rig-loading-label">CARREGANDO MODELO…</div>
+  </div>
+  <div class="env-section">
+    <div class="env-label">TOM DE PELE</div>
+    <div class="skin-bar" id="skin-bar"></div>
+  </div>
+</div>
+
+<div id="camisa-panel">
+  <div class="env-header"><span>CAMISA (TORSO + BRAÇOS)</span><button id="camisa-close">✕</button></div>
+  <div class="env-section">
+    <div class="env-label" id="shirt-file">NENHUM MOLDE CARREGADO</div>
+    <div class="slot-btns">
+      <button class="btn" id="btn-load-shirt">CARREGAR</button>
+      <button class="btn" id="btn-clear-shirt">LIMPAR</button>
+      <button class="btn" id="btn-guide-shirt">MOLDE GUIA</button>
+    </div>
+  </div>
+  <p class="note">Molde 585×559: 3 colunas (braço esq. · torso · braço dir.) e 2 linhas (frente em cima · costas embaixo). A roupa é uma camada por cima do boneco — os rigs não têm UV própria, então ela segue a proporção do corpo, não o relevo. Baixe o "MOLDE GUIA" pra ver as regiões marcadas.</p>
+</div>
+
+<div id="calca-panel">
+  <div class="env-header"><span>CALÇA (PERNAS)</span><button id="calca-close">✕</button></div>
+  <div class="env-section">
+    <div class="env-label" id="pants-file">NENHUM MOLDE CARREGADO</div>
+    <div class="slot-btns">
+      <button class="btn" id="btn-load-pants">CARREGAR</button>
+      <button class="btn" id="btn-clear-pants">LIMPAR</button>
+      <button class="btn" id="btn-guide-pants">MOLDE GUIA</button>
+    </div>
+  </div>
+  <p class="note">Mesmo molde 585×559 (só as colunas esquerda/direita são usadas). Prévia aproximada — pode haver diferenças em relação ao Studio oficial.</p>
+</div>
+
+<input type="file" id="input-shirt" accept="image/*">
+<input type="file" id="input-pants" accept="image/*">
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+
+function setAppHeight(){ document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`); }
+setAppHeight();
+window.addEventListener('resize', setAppHeight);
+window.addEventListener('orientationchange', setAppHeight);
+
+// ---------- Regiões do molde clássico (frações 0..1, espaço de imagem: x=esq->dir, y=topo->baixo) ----------
+const COL_SIDE = 128 / 585;
+const COL_MID_END = 457 / 585;
+const REGIONS = {
+  leftFront:  { x0: 0,            x1: COL_SIDE,    y0: 0,   y1: 0.5 },
+  leftBack:   { x0: 0,            x1: COL_SIDE,    y0: 0.5, y1: 1 },
+  midFront:   { x0: COL_SIDE,     x1: COL_MID_END, y0: 0,   y1: 0.5 },
+  midBack:    { x0: COL_SIDE,     x1: COL_MID_END, y0: 0.5, y1: 1 },
+  rightFront: { x0: COL_MID_END,  x1: 1,           y0: 0,   y1: 0.5 },
+  rightBack:  { x0: COL_MID_END,  x1: 1,           y0: 0.5, y1: 1 },
+};
+
+function setFaceUV(uvAttr, faceIndex, region){
+  const u0 = region.x0, u1 = region.x1;
+  const v0 = 1 - region.y1, v1 = 1 - region.y0;
+  const base = faceIndex * 4;
+  uvAttr.setXY(base + 0, u0, v1);
+  uvAttr.setXY(base + 1, u1, v1);
+  uvAttr.setXY(base + 2, u0, v0);
+  uvAttr.setXY(base + 3, u1, v0);
+}
+// faceIndex do BoxGeometry: 0=+x 1=-x 2=+y 3=-y 4=+z(frente) 5=-z(costas)
+function mapBoxToRegions(geometry, frontRegion, backRegion){
+  const uv = geometry.attributes.uv;
+  for(let f = 0; f < 6; f++) setFaceUV(uv, f, f === 5 ? backRegion : frontRegion);
+  uv.needsUpdate = true;
+}
+
+// ---------- Cena ----------
+const viewportEl = document.getElementById('viewport');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0c0d0f);
+
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.05, 50);
+let DEFAULT_CAM_POS = new THREE.Vector3(0, 1.35, 3.4);
+let DEFAULT_TARGET = new THREE.Vector3(0, 1.05, 0);
+camera.position.copy(DEFAULT_CAM_POS);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+viewportEl.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.copy(DEFAULT_TARGET);
+controls.minDistance = 1.2;
+controls.maxDistance = 7;
+controls.maxPolarAngle = Math.PI * 0.92;
+controls.update();
+
+scene.add(new THREE.HemisphereLight(0xdfe7ff, 0x15171b, 1.1));
+const key = new THREE.DirectionalLight(0xffffff, 1.6);
+key.position.set(2.2, 3.4, 2.6);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xbfd4ff, 0.5);
+fill.position.set(-2.4, 1.6, -1.8);
+scene.add(fill);
+
+const grid = new THREE.GridHelper(6, 24, 0x2a2d33, 0x1a1c20);
+scene.add(grid);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ---------- Rigs reais (os mesmos .obj usados no UGC Preview) ----------
+const ROBLOX_RIGS = [
+  { key:'blocky',    label:'BLOCKY',    file:'rigs/Starter_Blocky_Rig.obj' },
+  { key:'2.0',       label:'2.0',       file:'rigs/Starter_2.0_Rig.obj' },
+  { key:'boy',       label:'BOY',       file:'rigs/Starter_Boy_Rig.obj' },
+  { key:'girl',      label:'GIRL',      file:'rigs/Starter_Girl_Rig.obj' },
+  { key:'man',       label:'MAN',       file:'rigs/Starter_Man_Rig.obj' },
+  { key:'woman',     label:'WOMAN',     file:'rigs/Starter_Woman_Rig.obj' },
+  { key:'superhero', label:'SUPERHERO', file:'rigs/Starter_Superhero_Rig.obj' },
+];
+// Mesmos ícones usados no menu ☰ > PERSONALIZAR BONECO do roblox.html, pra
+// manter a mesma identidade visual entre as páginas.
+const RIG_ICONS = {
+  blocky: '🤖', '2.0': '🧍', boy: '👦', girl: '👧',
+  man: '👨', woman: '👩', superhero: '🦸',
+};
+const SKIN_TONES = [0xffe0bd, 0xe5b887, 0xc68642, 0x9c6644, 0x6b3b1f, 0x4a2e22];
+let currentSkin = SKIN_TONES[0];
+
+const rigTemplates = {}; // cache dos .obj já normalizados
+const avatarGroup = new THREE.Group();
+scene.add(avatarGroup);
+let rigInstance = null;
+let clothingBoxes = { torso:null, armL:null, armR:null, legL:null, legR:null };
+
+// Materiais persistentes — mantidos entre trocas de boneco, pra roupa já
+// carregada continuar aplicada quando o usuário troca de rig.
+const NEUTRAL_SHIRT = 0x2c2f35, NEUTRAL_PANTS = 0x24262b;
+const shirtMat = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85 });
+const armMatL  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85 });
+const armMatR  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85 });
+const pantsMatL = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85 });
+const pantsMatR = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85 });
+
+// Só ficam visíveis depois que o usuário carrega um molde — antes disso o
+// boneco fica limpo, sem nenhuma caixa cobrindo o corpo (esse era o bug:
+// as caixas apareciam sempre, mesmo sem molde nenhum carregado, tampando
+// o personagem inteiro com um bloco de cor neutra).
+let shirtLoaded = false;
+let pantsLoaded = false;
+
+function normalizeRigObject(obj){
+  const box1 = new THREE.Box3().setFromObject(obj);
+  const size1 = box1.getSize(new THREE.Vector3());
+  const targetHeight = 2.0;
+  const scale = size1.y > 0 ? targetHeight / size1.y : 1;
+  obj.scale.setScalar(scale);
+  obj.updateMatrixWorld(true);
+  const box2 = new THREE.Box3().setFromObject(obj);
+  const center2 = box2.getCenter(new THREE.Vector3());
+  obj.position.x -= center2.x;
+  obj.position.z -= center2.z;
+  obj.position.y -= box2.min.y;
+  obj.updateMatrixWorld(true);
+}
+
+function loadRigTemplate(rig){
+  if(rigTemplates[rig.key]) return Promise.resolve(rigTemplates[rig.key]);
+  return new Promise((resolve, reject) => {
+    const loader = new OBJLoader();
+    loader.load(rig.file, (loadedObj) => {
+      const upFix = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+      loadedObj.quaternion.copy(upFix);
+      const obj = new THREE.Group();
+      obj.add(loadedObj);
+      obj.updateMatrixWorld(true);
+      normalizeRigObject(obj);
+      rigTemplates[rig.key] = obj;
+      resolve(obj);
+    }, undefined, reject);
+  });
+}
+
+function tintRig(obj, toneHex){
+  obj.traverse(o => {
+    if(o.isMesh) o.material = new THREE.MeshStandardMaterial({ color: toneHex, metalness:0.05, roughness:0.75 });
+  });
+}
+
+function disposeClothingBoxes(){
+  Object.values(clothingBoxes).forEach(m => { if(m){ avatarGroup.remove(m); m.geometry.dispose(); } });
+  clothingBoxes = { torso:null, armL:null, armR:null, legL:null, legR:null };
+}
+
+// Caixas bem ajustadas ao corpo (não ao "espaço" em volta do boneco, que
+// varia de pose pra pose) — largura do torso/braço ligeiramente menor que
+// a largura total do rig, pra não engolir o modelo inteiro numa única
+// caixa disforme.
+function buildClothingForBox(box){
+  const size = box.getSize(new THREE.Vector3());
+  const minY = box.min.y;
+  const H = size.y, halfW = size.x / 2, depth = size.z;
+
+  const waistY = minY + H * 0.50;
+  const shoulderY = minY + H * 0.87;
+
+  const torsoGeo = new THREE.BoxGeometry(halfW * 1.9, shoulderY - waistY, depth * 1.04);
+  mapBoxToRegions(torsoGeo, REGIONS.midFront, REGIONS.midBack);
+  const torso = new THREE.Mesh(torsoGeo, shirtMat);
+  torso.position.set(0, (waistY + shoulderY) / 2, 0);
+  torso.visible = shirtLoaded;
+
+  const armW = halfW * 0.4, armH = (shoulderY - waistY) * 1.03;
+  const armGeoL = new THREE.BoxGeometry(armW, armH, depth * 0.78);
+  mapBoxToRegions(armGeoL, REGIONS.leftFront, REGIONS.leftBack);
+  const armL = new THREE.Mesh(armGeoL, armMatL);
+  armL.position.set(-(halfW * 0.98 + armW / 2), (waistY + shoulderY) / 2, 0);
+  armL.visible = shirtLoaded;
+
+  const armGeoR = new THREE.BoxGeometry(armW, armH, depth * 0.78);
+  mapBoxToRegions(armGeoR, REGIONS.rightFront, REGIONS.rightBack);
+  const armR = new THREE.Mesh(armGeoR, armMatR);
+  armR.position.set(halfW * 0.98 + armW / 2, (waistY + shoulderY) / 2, 0);
+  armR.visible = shirtLoaded;
+
+  const legW = halfW * 0.78, legH = waistY - minY;
+  const legGeoL = new THREE.BoxGeometry(legW, legH, depth * 0.9);
+  mapBoxToRegions(legGeoL, REGIONS.leftFront, REGIONS.leftBack);
+  const legL = new THREE.Mesh(legGeoL, pantsMatL);
+  legL.position.set(-halfW * 0.44, minY + legH / 2, 0);
+  legL.visible = pantsLoaded;
+
+  const legGeoR = new THREE.BoxGeometry(legW, legH, depth * 0.9);
+  mapBoxToRegions(legGeoR, REGIONS.rightFront, REGIONS.rightBack);
+  const legR = new THREE.Mesh(legGeoR, pantsMatR);
+  legR.position.set(halfW * 0.44, minY + legH / 2, 0);
+  legR.visible = pantsLoaded;
+
+  return { torso, armL, armR, legL, legR };
+}
+
+function refreshClothingVisibility(){
+  if(clothingBoxes.torso) clothingBoxes.torso.visible = shirtLoaded;
+  if(clothingBoxes.armL) clothingBoxes.armL.visible = shirtLoaded;
+  if(clothingBoxes.armR) clothingBoxes.armR.visible = shirtLoaded;
+  if(clothingBoxes.legL) clothingBoxes.legL.visible = pantsLoaded;
+  if(clothingBoxes.legR) clothingBoxes.legR.visible = pantsLoaded;
+}
+
+const loadingEl = document.getElementById('loading');
+const rigLoadingLabel = document.getElementById('rig-loading-label');
+const rigBarEl = document.getElementById('rig-bar');
+const errorToast = document.getElementById('error-toast');
+const errorText = document.getElementById('error-text');
+let loadToken = 0;
+
+function showError(msg){
+  errorText.textContent = msg;
+  errorToast.classList.add('show');
+  setTimeout(() => errorToast.classList.remove('show'), 4200);
+}
+
+async function selectRig(rig){
+  const token = ++loadToken;
+  [...rigBarEl.children].forEach((el, i) => el.classList.toggle('on', ROBLOX_RIGS[i].key === rig.key));
+  loadingEl.classList.add('active');
+  rigLoadingLabel.classList.add('active');
+  try{
+    const template = await loadRigTemplate(rig);
+    if(token !== loadToken) return; // usuário já trocou de boneco de novo
+    if(rigInstance){ avatarGroup.remove(rigInstance); }
+    disposeClothingBoxes();
+
+    rigInstance = template.clone(true);
+    tintRig(rigInstance, currentSkin);
+    avatarGroup.add(rigInstance);
+
+    const box = new THREE.Box3().setFromObject(rigInstance);
+    clothingBoxes = buildClothingForBox(box);
+    Object.values(clothingBoxes).forEach(m => avatarGroup.add(m));
+
+    const size = box.getSize(new THREE.Vector3());
+    DEFAULT_TARGET = new THREE.Vector3(0, size.y * 0.55, 0);
+    DEFAULT_CAM_POS = new THREE.Vector3(0, size.y * 0.62, size.y * 1.7);
+    camera.position.copy(DEFAULT_CAM_POS);
+    controls.target.copy(DEFAULT_TARGET);
+    controls.update();
+  } catch(err){
+    console.error('Erro ao carregar o boneco:', err);
+    showError(`não foi possível carregar "${rig.file}". Confira se a pasta rigs/ foi enviada junto no repositório.`);
+  } finally {
+    if(token === loadToken){ loadingEl.classList.remove('active'); rigLoadingLabel.classList.remove('active'); }
+  }
+}
+
+function applySkin(hex){
+  currentSkin = hex;
+  if(rigInstance) tintRig(rigInstance, hex);
+}
+
+// ---------- UI: menu (☰) e painéis ---------
+const btnMenu = document.getElementById('btn-menu');
+const panelEl = document.getElementById('panel');
+const bonecoPanel = document.getElementById('boneco-panel');
+const camisaPanel = document.getElementById('camisa-panel');
+const calcaPanel = document.getElementById('calca-panel');
+const allFloatPanels = [bonecoPanel, camisaPanel, calcaPanel];
+
+btnMenu.addEventListener('click', (e) => {
+  e.stopPropagation();
+  panelEl.classList.toggle('open');
+  btnMenu.classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+  if(panelEl.classList.contains('open') && !panelEl.contains(e.target) && !btnMenu.contains(e.target)){
+    panelEl.classList.remove('open');
+    btnMenu.classList.remove('open');
+  }
+});
+
+function openFloatPanel(target){
+  allFloatPanels.forEach(p => { if(p !== target) p.classList.remove('active'); });
+  target.classList.toggle('active');
+}
+
+document.getElementById('btn-boneco').addEventListener('click', () => openFloatPanel(bonecoPanel));
+document.getElementById('boneco-close').addEventListener('click', () => bonecoPanel.classList.remove('active'));
+document.getElementById('btn-camisa').addEventListener('click', () => openFloatPanel(camisaPanel));
+document.getElementById('camisa-close').addEventListener('click', () => camisaPanel.classList.remove('active'));
+document.getElementById('btn-calca').addEventListener('click', () => openFloatPanel(calcaPanel));
+document.getElementById('calca-close').addEventListener('click', () => calcaPanel.classList.remove('active'));
+
+// ---------- UI: seletor de boneco ----------
+ROBLOX_RIGS.forEach((rig, i) => {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'char-btn' + (i === 0 ? ' on' : '');
+  btn.textContent = RIG_ICONS[rig.key] || '🧍';
+  btn.title = rig.label;
+  btn.addEventListener('click', () => selectRig(rig));
+  rigBarEl.appendChild(btn);
+});
+selectRig(ROBLOX_RIGS[0]);
+
+// ---------- UI: pele ----------
+const skinBarEl = document.getElementById('skin-bar');
+SKIN_TONES.forEach((hex, i) => {
+  const el = document.createElement('div');
+  el.className = 'skin-swatch' + (i === 0 ? ' on' : '');
+  el.style.background = '#' + hex.toString(16).padStart(6, '0');
+  el.addEventListener('click', () => {
+    applySkin(hex);
+    [...skinBarEl.children].forEach((c, ci) => c.classList.toggle('on', ci === i));
+  });
+  skinBarEl.appendChild(el);
+});
+
+// ---------- Upload de moldes ----------
+const inputShirt = document.getElementById('input-shirt');
+const inputPants = document.getElementById('input-pants');
+const shirtFileEl = document.getElementById('shirt-file');
+const pantsFileEl = document.getElementById('pants-file');
+const hintEl = document.getElementById('hint');
+
+function loadTextureFromFile(file, onLoad){
+  const url = URL.createObjectURL(file);
+  new THREE.TextureLoader().load(url, (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    onLoad(tex);
+    URL.revokeObjectURL(url);
+  });
+}
+
+function applyShirtFile(file){
+  loadTextureFromFile(file, (tex) => {
+    [shirtMat, armMatL, armMatR].forEach(m => { m.map = tex; m.color.setHex(0xffffff); m.needsUpdate = true; });
+  });
+  shirtFileEl.textContent = file.name;
+  shirtLoaded = true;
+  refreshClothingVisibility();
+  hintEl.style.display = 'none';
+}
+function applyPantsFile(file){
+  loadTextureFromFile(file, (tex) => {
+    [pantsMatL, pantsMatR].forEach(m => { m.map = tex; m.color.setHex(0xffffff); m.needsUpdate = true; });
+  });
+  pantsFileEl.textContent = file.name;
+  pantsLoaded = true;
+  refreshClothingVisibility();
+  hintEl.style.display = 'none';
+}
+function clearShirt(){
+  [shirtMat, armMatL, armMatR].forEach(m => { m.map = null; m.color.setHex(NEUTRAL_SHIRT); m.needsUpdate = true; });
+  shirtFileEl.textContent = 'NENHUM MOLDE CARREGADO';
+  shirtLoaded = false;
+  refreshClothingVisibility();
+  inputShirt.value = '';
+}
+function clearPants(){
+  [pantsMatL, pantsMatR].forEach(m => { m.map = null; m.color.setHex(NEUTRAL_PANTS); m.needsUpdate = true; });
+  pantsFileEl.textContent = 'NENHUM MOLDE CARREGADO';
+  pantsLoaded = false;
+  refreshClothingVisibility();
+  inputPants.value = '';
+}
+
+document.getElementById('btn-load-shirt').addEventListener('click', () => inputShirt.click());
+document.getElementById('btn-load-pants').addEventListener('click', () => inputPants.click());
+document.getElementById('btn-clear-shirt').addEventListener('click', clearShirt);
+document.getElementById('btn-clear-pants').addEventListener('click', clearPants);
+inputShirt.addEventListener('change', (e) => { if(e.target.files[0]) applyShirtFile(e.target.files[0]); });
+inputPants.addEventListener('change', (e) => { if(e.target.files[0]) applyPantsFile(e.target.files[0]); });
+
+document.getElementById('btn-reset-view').addEventListener('click', () => {
+  camera.position.copy(DEFAULT_CAM_POS);
+  controls.target.copy(DEFAULT_TARGET);
+  controls.update();
+});
+
+// ---------- Drag & drop na viewport ----------
+['dragover', 'drop'].forEach(evt => viewportEl.addEventListener(evt, (e) => e.preventDefault()));
+viewportEl.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files && e.dataTransfer.files[0];
+  if(!file || !file.type.startsWith('image/')) return;
+  const name = file.name.toLowerCase();
+  if(name.includes('pant') || name.includes('cal')){
+    applyPantsFile(file);
+  } else if(shirtLoaded){
+    applyPantsFile(file);
+  } else {
+    applyShirtFile(file);
+  }
+});
+
+// ---------- Molde guia (gabarito 585x559 com as regiões marcadas) ----------
+function drawGuide(kind){
+  const W = 585, H = 559;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#141519';
+  ctx.fillRect(0, 0, W, H);
+
+  const labels = kind === 'shirt'
+    ? { leftFront:'BRAÇO ESQ · FRENTE', leftBack:'BRAÇO ESQ · COSTAS', midFront:'TORSO · FRENTE', midBack:'TORSO · COSTAS', rightFront:'BRAÇO DIR · FRENTE', rightBack:'BRAÇO DIR · COSTAS' }
+    : { leftFront:'PERNA ESQ · FRENTE', leftBack:'PERNA ESQ · COSTAS', midFront:'(NÃO USADO)', midBack:'(NÃO USADO)', rightFront:'PERNA DIR · FRENTE', rightBack:'PERNA DIR · COSTAS' };
+  const colors = { leftFront:'#5eead4', leftBack:'#3fb8a8', midFront:'#e39a3a', midBack:'#b97a29', rightFront:'#5eead4', rightBack:'#3fb8a8' };
+
+  Object.keys(REGIONS).forEach((k) => {
+    const r = REGIONS[k];
+    const x = r.x0 * W, y = r.y0 * H, w = (r.x1 - r.x0) * W, h = (r.y1 - r.y0) * H;
+    ctx.strokeStyle = colors[k]; ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+    ctx.fillStyle = colors[k]; ctx.font = '11px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(labels[k], x + w / 2, y + h / 2, w - 8);
+  });
+  ctx.strokeStyle = '#393c42'; ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+
+  const a = document.createElement('a');
+  a.href = canvas.toDataURL('image/png');
+  a.download = `molde-guia-${kind}-585x559.png`;
+  a.click();
+}
+document.getElementById('btn-guide-shirt').addEventListener('click', () => drawGuide('shirt'));
+document.getElementById('btn-guide-pants').addEventListener('click', () => drawGuide('pants'));
+</script>
+</body>
+</html>

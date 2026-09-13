@@ -528,40 +528,52 @@ function buildClothingForBox(box){
   const shoulderY = minY + H * 0.87;
   const torsoH = shoulderY - waistY;
 
-  const torsoHalfW = halfW * 0.62;
-  const torsoRadiusZ = depth * 0.42;
+  // Constantes medidas direto nos 7 arquivos .obj (Blocky/Man/Woman/Girl/
+  // Boy/Superhero/2.0): fração de "halfW" (metade da LARGURA TOTAL do
+  // boneco, ombro a ombro) ocupada pelo torso, braço e perna de cada um,
+  // com uma margem de segurança em cima do maior valor encontrado.
+  // Isso resolve o bug real: o raio do braço (0.155) e a profundidade do
+  // torso (baseada em "depth" — a profundidade da caixa do boneco INTEIRO,
+  // que varia de 0.6x a 0.88x o halfW dependendo do boneco, então ora
+  // acertava ora ficava pequena demais) ficavam menores que o braço/torso
+  // de verdade — a manga e boa parte da camisa nasciam ENTERRADAS dentro
+  // do boneco (por trás/dentro da malha dele) e só apareciam onde a malha
+  // do boneco tinha uma folga (o decote), daí a faixa fina que você via.
+  const torsoHalfW = halfW * 0.60;
+  const torsoRadiusZ = halfW * 0.46;
   const torsoGeo = buildTexturedTube(20, torsoH, REGIONS.torsoFront, REGIONS.torsoBack);
   const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.scale.set(torsoHalfW, 1, torsoRadiusZ);
   torso.position.set(0, (waistY + shoulderY) / 2, 0);
   torso.visible = shirtLoaded;
 
-  const armRadius = halfW * 0.155;
+  const armCenterX = halfW * 0.75;
+  const armRadius = halfW * 0.33;
   const armH = torsoH * 1.02;
   const armGeoL = buildTexturedTube(14, armH, REGIONS.rightArmFront, REGIONS.rightArmBack);
   const armL = new THREE.Mesh(armGeoL, armMatL);
   armL.scale.set(armRadius, 1, armRadius);
-  armL.position.set(-(torsoHalfW + armRadius), (waistY + shoulderY) / 2, 0);
+  armL.position.set(-armCenterX, (waistY + shoulderY) / 2, 0);
   armL.visible = shirtLoaded;
 
   const armGeoR = buildTexturedTube(14, armH, REGIONS.leftArmFront, REGIONS.leftArmBack);
   const armR = new THREE.Mesh(armGeoR, armMatR);
   armR.scale.set(armRadius, 1, armRadius);
-  armR.position.set(torsoHalfW + armRadius, (waistY + shoulderY) / 2, 0);
+  armR.position.set(armCenterX, (waistY + shoulderY) / 2, 0);
   armR.visible = shirtLoaded;
 
-  const legRadius = halfW * 0.32;
+  const legRadius = halfW * 0.40;
+  const legCenterX = halfW * 0.27;
   const legH = waistY - minY;
-  const legCenterX = legRadius + halfW * 0.06;
   const legGeoL = buildTexturedTube(14, legH, REGIONS.rightArmFront, REGIONS.rightArmBack);
   const legL = new THREE.Mesh(legGeoL, pantsMatL);
-  legL.scale.set(legRadius, 1, depth * 0.34);
+  legL.scale.set(legRadius, 1, legRadius);
   legL.position.set(-legCenterX, minY + legH / 2, 0);
   legL.visible = pantsLoaded;
 
   const legGeoR = buildTexturedTube(14, legH, REGIONS.leftArmFront, REGIONS.leftArmBack);
   const legR = new THREE.Mesh(legGeoR, pantsMatR);
-  legR.scale.set(legRadius, 1, depth * 0.34);
+  legR.scale.set(legRadius, 1, legRadius);
   legR.position.set(legCenterX, minY + legH / 2, 0);
   legR.visible = pantsLoaded;
 

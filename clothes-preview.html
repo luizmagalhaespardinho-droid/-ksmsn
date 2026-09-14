@@ -434,7 +434,20 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
         outNormals.push(faceNormal.x, faceNormal.y, faceNormal.z);
       }
       if(useCap){
-        outUVs.push(...mapUV(region, (w.x - minWX) / rangeWX, (w.z - minWZ) / rangeWZ));
+        // No molde, UP fica ACIMA do FRONT (a borda de baixo do UP,
+        // y1, é quem gruda no topo do FRONT) e DOWN fica ABAIXO do
+        // FRONT (a borda de CIMA do DOWN, y0, é quem gruda no fundo do
+        // FRONT). Ou seja: a borda "colada" no FRONT é y1 pro UP mas y0
+        // pro DOWN — são opostas. A frente da peça (Z maior, mais perto
+        // da câmera) sempre tem que cair nessa borda colada, já que é
+        // ela que fisicamente continua a estampa da frente. Pro DOWN,
+        // (z - minWZ) já fazia isso certo (frente → vFrac=1 → y0). Pro
+        // UP, essa MESMA conta dava frente → vFrac=1 → y0, só que aí y0
+        // é a borda de CIMA (longe do FRONT) — por isso o colarinho
+        // nascia invertido. Só o UP precisa de (maxWZ - z) invertido.
+        const isUpCap = (region === regions.up);
+        const zFrac = isUpCap ? (maxWZ - w.z) / rangeWZ : (w.z - minWZ) / rangeWZ;
+        outUVs.push(...mapUV(region, (w.x - minWX) / rangeWX, zFrac));
       } else {
         // A célula BACK do molde do Roblox já vem "espelhada" em relação
         // à FRONT (é assim que ele desenrola a caixa do avatar) — por
@@ -442,7 +455,19 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
         // de mundo direto, sem espelhar.
         const xFracWorld = (w.x - minWX) / rangeWX;
         const uFrac = isFront ? xFracWorld : (1 - xFracWorld);
-        outUVs.push(...mapUV(region, uFrac, (w.y - minWY) / rangeWY));
+        // Quando a peça tem Up/Down (torso e braço), o front/back só
+        // ocupa a faixa do MEIO da altura (as duas pontas, capFrac, vão
+        // pro Up/Down) — mas essa conta aqui ainda usava minWY/maxWY (a
+        // altura INTEIRA), então a região nunca alcançava as bordas
+        // y0/y1 do próprio recorte front/back — sobrava uma tira sem
+        // desenhar em cada ponta (era aí que ia embora parte da faixa
+        // verde perto da barra). Reescalamos pra faixa do meio virar
+        // 0..1 cheio. Perna não tem Up/Down (hasCaps=false), então
+        // mantém o range inteiro de sempre.
+        const vMin = hasCaps ? bottomCutWY : minWY;
+        const vMax = hasCaps ? topCutWY : maxWY;
+        const vFracBody = (w.y - vMin) / ((vMax - vMin) || 1);
+        outUVs.push(...mapUV(region, uFrac, vFracBody));
       }
     });
   }

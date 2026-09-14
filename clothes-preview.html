@@ -427,21 +427,31 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
 
     let region, useCap = false, isFront = false, isSide = false, isRightSide = false;
 
-    if(hasCaps && absY > Math.max(absX, absZ) &&
-       (centerWY >= topCutWY || centerWY <= bottomCutWY)){
+    // A faixa de altura do Up/Down (ombro/quadril) é "terreno do cap":
+    // mesmo um triângulo que não bata o teste de normal do cap (2), se
+    // estiver nessa faixa, não pode virar Side (3) — senão ele vira
+    // vizinho direto do Up/Down numa emenda dura entre duas células do
+    // molde sem nenhuma relação (foi isso que criou o retalho preto no
+    // colarinho/ombro). Preferimos jogar pro front/back nessa faixa,
+    // que já era a borda testada antes de existir região lateral.
+    const inCapZone = hasCaps && (centerWY >= topCutWY || centerWY <= bottomCutWY);
+
+    if(hasCaps && absY > Math.max(absX, absZ) && inCapZone){
       // 1) Topo/base — normal dominante em Y, perto da borda de altura.
       useCap = true;
       region = centerWY >= topCutWY ? regions.up : regions.down;
-    } else if(!hasSides || absZ >= absX){
-      // 2) Frente/costas — normal dominante em Z (ou peça sem região
-      // lateral própria, ex.: perna, que sempre cai aqui, igual antes).
-      // Frente = normal de mundo olhando pra câmera (Z positivo).
+    } else if(!hasSides || inCapZone || absZ >= absX){
+      // 2) Frente/costas — normal dominante em Z, peça sem região
+      // lateral própria (ex.: perna, que sempre cai aqui, igual antes),
+      // ou triângulo dentro da faixa de altura do cap que não virou Up/
+      // Down. Frente = normal de mundo olhando pra câmera (Z positivo).
       isFront = faceNormalWorld.z > 0;
       region = isFront ? regions.front : regions.back;
     } else {
-      // 3) Laterais — normal dominante em X. A câmera olha de frente
-      // pro boneco, então -X de mundo é o lado DIREITO do personagem
-      // (e +X é o esquerdo).
+      // 3) Laterais — só na faixa de altura do "corpo" (fora do cap).
+      // Normal dominante em X. A câmera olha de frente pro boneco,
+      // então -X de mundo é o lado DIREITO do personagem (e +X é o
+      // esquerdo).
       isSide = true;
       isRightSide = faceNormalWorld.x < 0;
       region = isRightSide ? regions.right : regions.left;

@@ -340,10 +340,14 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
   const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
   const eab = new THREE.Vector3(), eac = new THREE.Vector3(), faceNormal = new THREE.Vector3();
 
-  function mapUV(region, uFrac, vFrac){
+  function mapUV(region, uFrac, vFracBottomToTop){
     const u = region.x0 + THREE.MathUtils.clamp(uFrac, 0, 1) * (region.x1 - region.x0);
-    const vRegion = region.y0 + THREE.MathUtils.clamp(vFrac, 0, 1) * (region.y1 - region.y0);
-    return [u, 1 - vRegion];
+    // vFracBottomToTop: 0 = base do corpo, 1 = topo do corpo (perto da
+    // gola/ombro). O retângulo do molde é medido com y crescendo de
+    // CIMA pra BAIXO da imagem — então topo do corpo (1) tem que cair
+    // perto de region.y0 (topo do retângulo), não perto de region.y1.
+    const r = region.y0 + (1 - THREE.MathUtils.clamp(vFracBottomToTop, 0, 1)) * (region.y1 - region.y0);
+    return [u, 1 - r];
   }
 
   const triCount = srcPos.count / 3;

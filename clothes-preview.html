@@ -285,16 +285,24 @@ const REGIONS = {
   torsoBack:      { x0: 0.730, x1: 0.947, y0: 0.132, y1: 0.360 },
   torsoUp:        { x0: 0.395, x1: 0.612, y0: 0.014, y1: 0.127 },
   torsoDown:      { x0: 0.395, x1: 0.612, y0: 0.365, y1: 0.478 },
+  // Células laterais do torso (R/L do molde) — antes não existiam,
+  // então as faces de lado do torso caíam no front/back e esticavam.
+  torsoRight:     { x0: 0.282, x1: 0.390, y0: 0.132, y1: 0.360 },
+  torsoLeft:      { x0: 0.617, x1: 0.725, y0: 0.132, y1: 0.360 },
   // Tira esquerda do molde (x 0.03-0.48) = BRAÇO/PERNA DIREITO do boneco.
   rightArmFront:  { x0: 0.371, x1: 0.479, y0: 0.635, y1: 0.862 },
   rightArmBack:   { x0: 0.145, x1: 0.253, y0: 0.635, y1: 0.862 },
   rightArmUp:     { x0: 0.371, x1: 0.479, y0: 0.517, y1: 0.630 },
   rightArmDown:   { x0: 0.371, x1: 0.479, y0: 0.868, y1: 0.980 },
+  rightArmRight:  { x0: 0.258, x1: 0.366, y0: 0.635, y1: 0.862 },
+  rightArmLeft:   { x0: 0.032, x1: 0.140, y0: 0.635, y1: 0.862 },
   // Tira direita do molde (x 0.53-0.97) = BRAÇO/PERNA ESQUERDO do boneco.
   leftArmFront:   { x0: 0.526, x1: 0.634, y0: 0.635, y1: 0.862 },
   leftArmBack:    { x0: 0.752, x1: 0.860, y0: 0.635, y1: 0.862 },
   leftArmUp:      { x0: 0.526, x1: 0.634, y0: 0.517, y1: 0.630 },
   leftArmDown:    { x0: 0.526, x1: 0.634, y0: 0.868, y1: 0.980 },
+  leftArmLeft:    { x0: 0.639, x1: 0.747, y0: 0.635, y1: 0.862 },
+  leftArmRight:   { x0: 0.865, x1: 0.973, y0: 0.635, y1: 0.862 },
 };
 
 // ---------- Roupa colada na malha REAL do boneco ----------
@@ -364,7 +372,6 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
     if(z < minWZ) minWZ = z; if(z > maxWZ) maxWZ = z;
   }
   const rangeWX = (maxWX - minWX) || 1, rangeWY = (maxWY - minWY) || 1, rangeWZ = (maxWZ - minWZ) || 1;
-  const midWZ = (minWZ + maxWZ) / 2;
   const topCutWY = maxWY - rangeWY * capFrac, bottomCutWY = minWY + rangeWY * capFrac;
 
   const outPositions = [];
@@ -387,6 +394,13 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
     return [u, 1 - r];
   }
 
+  // hasCaps: peça tem região própria de topo/base (torso e braço têm,
+  // perna não). hasSides: peça tem região própria de lateral (só quem
+  // recebe `left`/`right` em opts — hoje torso e braços; perna continua
+  // sem, então cai direto no front/back de sempre, ver fallback abaixo).
+  const hasCaps = !!(regions.up && regions.down);
+  const hasSides = !!(regions.left && regions.right);
+
   const triCount = srcPos.count / 3;
   for(let t = 0; t < triCount; t++){
     const i0 = t * 3, i1 = i0 + 1, i2 = i0 + 2;
@@ -401,22 +415,36 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
     wc.set(worldPos[i2*3], worldPos[i2*3+1], worldPos[i2*3+2]);
     weab.subVectors(wb, wa); weac.subVectors(wc, wa);
     faceNormalWorld.crossVectors(weab, weac).normalize();
-    const centerWX = (wa.x + wb.x + wc.x) / 3;
     const centerWY = (wa.y + wb.y + wc.y) / 3;
-    const centerWZ = (wa.z + wb.z + wc.z) / 3;
 
-    let region, useCap = false, isFront = false;
-    const hasCaps = !!(regions.up && regions.down);
-    if(hasCaps && Math.abs(faceNormalWorld.y) > Math.max(Math.abs(faceNormalWorld.x), Math.abs(faceNormalWorld.z)) &&
+    // Projeção triplanar: qual eixo da normal de mundo domina decide
+    // se a face é topo/base, frente/costas ou lateral — em vez de usar
+    // só a posição Z do centro da face (que classificava lateral como
+    // frente/costas e esticava a estampa nas bordas do torso/braço).
+    const absX = Math.abs(faceNormalWorld.x);
+    const absY = Math.abs(faceNormalWorld.y);
+    const absZ = Math.abs(faceNormalWorld.z);
+
+    let region, useCap = false, isFront = false, isSide = false, isRightSide = false;
+
+    if(hasCaps && absY > Math.max(absX, absZ) &&
        (centerWY >= topCutWY || centerWY <= bottomCutWY)){
+      // 1) Topo/base — normal dominante em Y, perto da borda de altura.
       useCap = true;
       region = centerWY >= topCutWY ? regions.up : regions.down;
-    } else {
-      // Frente = metade do corpo voltada pra câmera por padrão (Z de
-      // mundo maior = mais perto da câmera, que fica parada olhando de
-      // frente pro boneco).
-      isFront = centerWZ >= midWZ;
+    } else if(!hasSides || absZ >= absX){
+      // 2) Frente/costas — normal dominante em Z (ou peça sem região
+      // lateral própria, ex.: perna, que sempre cai aqui, igual antes).
+      // Frente = normal de mundo olhando pra câmera (Z positivo).
+      isFront = faceNormalWorld.z > 0;
       region = isFront ? regions.front : regions.back;
+    } else {
+      // 3) Laterais — normal dominante em X. A câmera olha de frente
+      // pro boneco, então -X de mundo é o lado DIREITO do personagem
+      // (e +X é o esquerdo).
+      isSide = true;
+      isRightSide = faceNormalWorld.x < 0;
+      region = isRightSide ? regions.right : regions.left;
     }
 
     [[va, wa, i0], [vb, wb, i1], [vc, wc, i2]].forEach(([v, w, idx]) => {
@@ -448,6 +476,21 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
         const isUpCap = (region === regions.up);
         const zFrac = isUpCap ? (maxWZ - w.z) / rangeWZ : (w.z - minWZ) / rangeWZ;
         outUVs.push(...mapUV(region, (w.x - minWX) / rangeWX, zFrac));
+      } else if(isSide){
+        // Face lateral "olha" pro eixo X, então a largura dela (o
+        // uFrac) corre ao longo da PROFUNDIDADE (Z) da peça, não da
+        // largura (X) — senão a estampa lateral saía esticada/achatada
+        // na direção errada. O lado direito inverte a fração
+        // (1 - zFracWorld) pra a textura não sair espelhada em relação
+        // ao lado esquerdo.
+        const zFracWorld = (w.z - minWZ) / rangeWZ;
+        const uFrac = isRightSide ? (1 - zFracWorld) : zFracWorld;
+        // Mesma faixa de altura (vMin/vMax) que front/back usa — as
+        // células laterais do molde ocupam o mesmo y0/y1 da frente.
+        const vMin = hasCaps ? bottomCutWY : minWY;
+        const vMax = hasCaps ? topCutWY : maxWY;
+        const vFracBody = (w.y - vMin) / ((vMax - vMin) || 1);
+        outUVs.push(...mapUV(region, uFrac, vFracBody));
       } else {
         // A célula BACK do molde do Roblox já vem "espelhada" em relação
         // à FRONT (é assim que ele desenrola a caixa do avatar) — por
@@ -657,29 +700,33 @@ function buildClothingFromRig(innerGroup){
   const worldMatrix = innerGroup.matrixWorld;
 
   const torsoGeo = buildShellFromPart(parts.torso.geometry,
-    { front: REGIONS.torsoFront, back: REGIONS.torsoBack, up: REGIONS.torsoUp, down: REGIONS.torsoDown },
+    { front: REGIONS.torsoFront, back: REGIONS.torsoBack, up: REGIONS.torsoUp, down: REGIONS.torsoDown,
+      left: REGIONS.torsoLeft, right: REGIONS.torsoRight },
     { worldMatrix });
   const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.userData.isClothing = true;
   torso.visible = shirtLoaded;
 
   const armGeoL = buildShellFromPart(parts.armLeft.geometry,
-    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack, up: REGIONS.rightArmUp, down: REGIONS.rightArmDown },
+    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack, up: REGIONS.rightArmUp, down: REGIONS.rightArmDown,
+      left: REGIONS.rightArmLeft, right: REGIONS.rightArmRight },
     { worldMatrix });
   const armL = new THREE.Mesh(armGeoL, armMatL);
   armL.userData.isClothing = true;
   armL.visible = shirtLoaded;
 
   const armGeoR = buildShellFromPart(parts.armRight.geometry,
-    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack, up: REGIONS.leftArmUp, down: REGIONS.leftArmDown },
+    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack, up: REGIONS.leftArmUp, down: REGIONS.leftArmDown,
+      left: REGIONS.leftArmLeft, right: REGIONS.leftArmRight },
     { worldMatrix });
   const armR = new THREE.Mesh(armGeoR, armMatR);
   armR.userData.isClothing = true;
   armR.visible = shirtLoaded;
 
-  // Pernas não têm região "Up/Down" própria no molde (reaproveitam a
-  // mesma tira do braço, igual já era antes) — sem `up`/`down` o
-  // buildShellFromPart cai direto no front/back pra toda a peça.
+  // Pernas não têm região própria de Up/Down nem Left/Right no molde
+  // (reaproveitam a mesma tira do braço, igual já era antes) — sem
+  // essas chaves, buildShellFromPart cai direto no front/back pra toda
+  // a peça (ver hasCaps/hasSides lá dentro).
   const legGeoL = buildShellFromPart(parts.legLeft.geometry,
     { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack },
     { worldMatrix });

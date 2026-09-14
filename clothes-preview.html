@@ -357,14 +357,17 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
     const centerZ = (va.z + vb.z + vc.z) / 3;
     const centerY = (va.y + vb.y + vc.y) / 3;
 
-    let region, useCap = false;
+    let region, useCap = false, isBack = false;
     const hasCaps = !!(regions.up && regions.down);
     if(hasCaps && Math.abs(faceNormal.z) > Math.max(Math.abs(faceNormal.y), Math.abs(faceNormal.x)) &&
        (centerZ >= topCut || centerZ <= bottomCut)){
       useCap = true;
       region = centerZ >= topCut ? regions.up : regions.down;
     } else {
-      region = centerY >= 0 ? regions.front : regions.back;
+      // y>0 no espaço bruto do .obj é a metade de TRÁS do rig (não a
+      // frente — na prática deu invertido, testado direto no preview).
+      isBack = centerY >= 0;
+      region = isBack ? regions.back : regions.front;
     }
 
     [va, vb, vc].forEach(v => {
@@ -376,7 +379,12 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
       if(useCap){
         outUVs.push(...mapUV(region, (v.x - minX) / rangeX, (v.y - minY) / rangeY));
       } else {
-        outUVs.push(...mapUV(region, (v.x - minX) / rangeX, (v.z - minZ) / rangeZ));
+        // De costas, esquerda/direita troca de lado (é como olhar um
+        // espelho) — por isso o u percorre o eixo x AO CONTRÁRIO nas
+        // costas, senão o desenho sai espelhado errado nelas.
+        const xFrac = (v.x - minX) / rangeX;
+        const uFrac = isBack ? (1 - xFrac) : xFrac;
+        outUVs.push(...mapUV(region, uFrac, (v.z - minZ) / rangeZ));
       }
     });
   }

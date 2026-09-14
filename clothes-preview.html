@@ -355,8 +355,8 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
     // por isso o `invertV` deixa cada peça escolher o sentido certo.
     const vFrac = THREE.MathUtils.clamp(vFracBottomToTop, 0, 1);
     const r = invertV
-      ? region.y0 + vFrac * (region.y1 - region.y0)
-      : region.y0 + (1 - vFrac) * (region.y1 - region.y0);
+      ? region.y0 + (1 - vFrac) * (region.y1 - region.y0)
+      : region.y0 + vFrac * (region.y1 - region.y0);
     return [u, 1 - r];
   }
 

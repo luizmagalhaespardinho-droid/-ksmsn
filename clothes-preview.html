@@ -328,10 +328,10 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
   // sempre sai pra fora, não importa a forma.
   const outwardDist = opts.outwardDist ?? 0.035;
   const capFrac = opts.capFrac ?? 0.08;     // % do topo/base tratado como tampa (Up/Down)
-  const invertV = opts.invertV ?? false;    // ver comentário no mapUV
 
   const geo = sourceGeometry.index ? sourceGeometry.toNonIndexed() : sourceGeometry.clone();
   const srcPos = geo.attributes.position;
+  const srcNorm = geo.attributes.normal; // normais suaves originais (ver nota mais abaixo)
 
   geo.computeBoundingBox();
   const bb = geo.boundingBox;
@@ -343,20 +343,22 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
 
   const outPositions = [];
   const outUVs = [];
+  const outNormals = [];
   const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
   const eab = new THREE.Vector3(), eac = new THREE.Vector3(), faceNormal = new THREE.Vector3();
 
   function mapUV(region, uFrac, vFracBottomToTop){
     const u = region.x0 + THREE.MathUtils.clamp(uFrac, 0, 1) * (region.x1 - region.x0);
-    // vFracBottomToTop: 0 = base do corpo, 1 = topo do corpo (perto da
-    // gola/ombro). No torso o molde é medido com y crescendo de CIMA
-    // pra BAIXO da imagem, então topo do corpo cai perto de region.y0 —
-    // mas no braço/perna deu o oposto na prática (testado no preview),
-    // por isso o `invertV` deixa cada peça escolher o sentido certo.
+    // vFracBottomToTop: 0 = base do corpo (barra/punho/tornozelo), 1 = topo
+    // do corpo (gola/ombro/quadril). No molde, y CRESCE de cima pra baixo
+    // da imagem — então "topo do corpo" tem que cair sempre perto de
+    // region.y0 (topo da célula) e "base do corpo" perto de region.y1
+    // (base da célula). Essa regra vale igual pro torso, braço e perna —
+    // por isso não existe mais um `invertV` por peça: era esse parâmetro
+    // que fazia manga/calça saírem de ponta-cabeça enquanto o torso ficava
+    // certo (cada um usava uma fórmula diferente pra mesma coisa).
     const vFrac = THREE.MathUtils.clamp(vFracBottomToTop, 0, 1);
-    const r = invertV
-      ? region.y0 + (1 - vFrac) * (region.y1 - region.y0)
-      : region.y0 + vFrac * (region.y1 - region.y0);
+    const r = region.y0 + (1 - vFrac) * (region.y1 - region.y0);
     return [u, 1 - r];
   }
 
@@ -384,19 +386,38 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
       region = isBack ? regions.back : regions.front;
     }
 
-    [va, vb, vc].forEach(v => {
+    [[va, i0], [vb, i1], [vc, i2]].forEach(([v, idx]) => {
       const px = v.x + faceNormal.x * outwardDist;
       const py = v.y + faceNormal.y * outwardDist;
       const pz = v.z + faceNormal.z * outwardDist;
       outPositions.push(px, py, pz);
+      // Normal: copiamos a normal SUAVE original do vértice (do .obj) em
+      // vez de recalcular depois de "explodir" a malha em triângulos sem
+      // vértice compartilhado — computeVertexNormals() num non-indexed
+      // não tem vizinho pra suavizar com, então cada triângulo vira uma
+      // faceta plana isolada, e a luz bate diferente em cada uma = as
+      // listras/riscos brancos na camisa e na calça. Copiando a normal
+      // original a superfície volta a ficar lisa, do jeito que o boneco
+      // já era antes de virar roupa.
+      if(srcNorm){
+        outNormals.push(srcNorm.getX(idx), srcNorm.getY(idx), srcNorm.getZ(idx));
+      } else {
+        outNormals.push(faceNormal.x, faceNormal.y, faceNormal.z);
+      }
       if(useCap){
         outUVs.push(...mapUV(region, (v.x - minX) / rangeX, (v.y - minY) / rangeY));
       } else {
-        // De costas, esquerda/direita troca de lado (é como olhar um
-        // espelho) — por isso o u percorre o eixo x AO CONTRÁRIO nas
-        // costas, senão o desenho sai espelhado errado nelas.
+        // FRENTE e COSTAS pedem espelhamentos horizontais opostos (é o
+        // jeito que o próprio molde do Roblox funciona: a célula BACK do
+        // molde já vem "espelhada" em relação à FRONT, porque é assim que
+        // ele desenrola a caixa do avatar). A versão anterior aplicava o
+        // espelhamento na célula errada (front sem espelhar, back
+        // espelhando) — só que, depois do boneco girar 180° pra encarar a
+        // câmera, é exatamente o contrário: quem precisa espelhar é a
+        // FRENTE, e a costas fica direto. Por isso a estampa saía de
+        // ponta-cabeça E ao contrário ao mesmo tempo.
         const xFrac = (v.x - minX) / rangeX;
-        const uFrac = isBack ? (1 - xFrac) : xFrac;
+        const uFrac = isBack ? xFrac : (1 - xFrac);
         outUVs.push(...mapUV(region, uFrac, (v.z - minZ) / rangeZ));
       }
     });
@@ -405,7 +426,11 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
   const outGeo = new THREE.BufferGeometry();
   outGeo.setAttribute('position', new THREE.Float32BufferAttribute(outPositions, 3));
   outGeo.setAttribute('uv', new THREE.Float32BufferAttribute(outUVs, 2));
-  outGeo.computeVertexNormals();
+  if(srcNorm){
+    outGeo.setAttribute('normal', new THREE.Float32BufferAttribute(outNormals, 3));
+  } else {
+    outGeo.computeVertexNormals();
+  }
   return outGeo;
 }
 
@@ -582,22 +607,19 @@ function buildClothingFromRig(innerGroup){
   const parts = classifyRigParts(innerGroup);
 
   const torsoGeo = buildShellFromPart(parts.torso.geometry,
-    { front: REGIONS.torsoFront, back: REGIONS.torsoBack, up: REGIONS.torsoUp, down: REGIONS.torsoDown },
-    { invertV: true });
+    { front: REGIONS.torsoFront, back: REGIONS.torsoBack, up: REGIONS.torsoUp, down: REGIONS.torsoDown });
   const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.userData.isClothing = true;
   torso.visible = shirtLoaded;
 
   const armGeoL = buildShellFromPart(parts.armLeft.geometry,
-    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack, up: REGIONS.rightArmUp, down: REGIONS.rightArmDown },
-    { invertV: false });
+    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack, up: REGIONS.rightArmUp, down: REGIONS.rightArmDown });
   const armL = new THREE.Mesh(armGeoL, armMatL);
   armL.userData.isClothing = true;
   armL.visible = shirtLoaded;
 
   const armGeoR = buildShellFromPart(parts.armRight.geometry,
-    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack, up: REGIONS.leftArmUp, down: REGIONS.leftArmDown },
-    { invertV: false });
+    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack, up: REGIONS.leftArmUp, down: REGIONS.leftArmDown });
   const armR = new THREE.Mesh(armGeoR, armMatR);
   armR.userData.isClothing = true;
   armR.visible = shirtLoaded;
@@ -606,15 +628,13 @@ function buildClothingFromRig(innerGroup){
   // mesma tira do braço, igual já era antes) — sem `up`/`down` o
   // buildShellFromPart cai direto no front/back pra toda a peça.
   const legGeoL = buildShellFromPart(parts.legLeft.geometry,
-    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack },
-    { invertV: false });
+    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack });
   const legL = new THREE.Mesh(legGeoL, pantsMatL);
   legL.userData.isClothing = true;
   legL.visible = pantsLoaded;
 
   const legGeoR = buildShellFromPart(parts.legRight.geometry,
-    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack },
-    { invertV: false });
+    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack });
   const legR = new THREE.Mesh(legGeoR, pantsMatR);
   legR.userData.isClothing = true;
   legR.visible = pantsLoaded;

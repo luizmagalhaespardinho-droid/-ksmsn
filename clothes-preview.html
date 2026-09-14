@@ -628,11 +628,11 @@ let clothingBoxes = { torso:null, armL:null, armR:null, legL:null, legR:null };
 // Materiais persistentes — mantidos entre trocas de boneco, pra roupa já
 // carregada continuar aplicada quando o usuário troca de rig.
 const NEUTRAL_SHIRT = 0x2c2f35, NEUTRAL_PANTS = 0x24262b;
-const shirtMat = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85, side: THREE.DoubleSide });
-const armMatL  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85, side: THREE.DoubleSide });
-const armMatR  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85, side: THREE.DoubleSide });
-const pantsMatL = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85, side: THREE.DoubleSide });
-const pantsMatR = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85, side: THREE.DoubleSide });
+const shirtMat = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85, side: THREE.DoubleSide, transparent: true, alphaTest: 0.5 });
+const armMatL  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85, side: THREE.DoubleSide, transparent: true, alphaTest: 0.5 });
+const armMatR  = new THREE.MeshStandardMaterial({ color: NEUTRAL_SHIRT, roughness:.85, side: THREE.DoubleSide, transparent: true, alphaTest: 0.5 });
+const pantsMatL = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85, side: THREE.DoubleSide, transparent: true, alphaTest: 0.5 });
+const pantsMatR = new THREE.MeshStandardMaterial({ color: NEUTRAL_PANTS, roughness:.85, side: THREE.DoubleSide, transparent: true, alphaTest: 0.5 });
 
 // Só ficam visíveis depois que o usuário carrega um molde — antes disso o
 // boneco fica limpo, sem nenhuma caixa cobrindo o corpo (esse era o bug:

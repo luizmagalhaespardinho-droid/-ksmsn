@@ -320,8 +320,15 @@ const REGIONS = {
 // pra trás → "Back"; face de topo/base perto da borda da peça (ombro,
 // topo da perna) → "Up"/"Down" quando a peça tiver essas regiões.
 function buildShellFromPart(sourceGeometry, regions, opts = {}){
-  const outwardXY = opts.outwardXY ?? 1.07; // infla só em x/y (largura/profundidade), mantém a altura exata
+  // Desloca cada FACE pra fora ao longo da própria normal (em vez de
+  // escalar em volta de um centro único) — em peça afunilada (braço/
+  // perna/torso mais fino numa ponta) escalar em volta de um centro só
+  // podia empurrar vértice PRA DENTRO em vez de pra fora, cruzando a
+  // própria malha e piscando (z-fighting). Deslocar pela normal da face
+  // sempre sai pra fora, não importa a forma.
+  const outwardDist = opts.outwardDist ?? 0.035;
   const capFrac = opts.capFrac ?? 0.08;     // % do topo/base tratado como tampa (Up/Down)
+  const invertV = opts.invertV ?? false;    // ver comentário no mapUV
 
   const geo = sourceGeometry.index ? sourceGeometry.toNonIndexed() : sourceGeometry.clone();
   const srcPos = geo.attributes.position;
@@ -331,7 +338,6 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
   const minX = bb.min.x, maxX = bb.max.x;
   const minY = bb.min.y, maxY = bb.max.y; // eixo de profundidade (frente/costas) no .obj bruto
   const minZ = bb.min.z, maxZ = bb.max.z; // eixo de altura no .obj bruto
-  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
   const rangeX = (maxX - minX) || 1, rangeY = (maxY - minY) || 1, rangeZ = (maxZ - minZ) || 1;
   const topCut = maxZ - rangeZ * capFrac, bottomCut = minZ + rangeZ * capFrac;
 
@@ -343,10 +349,14 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
   function mapUV(region, uFrac, vFracBottomToTop){
     const u = region.x0 + THREE.MathUtils.clamp(uFrac, 0, 1) * (region.x1 - region.x0);
     // vFracBottomToTop: 0 = base do corpo, 1 = topo do corpo (perto da
-    // gola/ombro). O retângulo do molde é medido com y crescendo de
-    // CIMA pra BAIXO da imagem — então topo do corpo (1) tem que cair
-    // perto de region.y0 (topo do retângulo), não perto de region.y1.
-    const r = region.y0 + (1 - THREE.MathUtils.clamp(vFracBottomToTop, 0, 1)) * (region.y1 - region.y0);
+    // gola/ombro). No torso o molde é medido com y crescendo de CIMA
+    // pra BAIXO da imagem, então topo do corpo cai perto de region.y0 —
+    // mas no braço/perna deu o oposto na prática (testado no preview),
+    // por isso o `invertV` deixa cada peça escolher o sentido certo.
+    const vFrac = THREE.MathUtils.clamp(vFracBottomToTop, 0, 1);
+    const r = invertV
+      ? region.y0 + vFrac * (region.y1 - region.y0)
+      : region.y0 + (1 - vFrac) * (region.y1 - region.y0);
     return [u, 1 - r];
   }
 
@@ -375,11 +385,10 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
     }
 
     [va, vb, vc].forEach(v => {
-      // infla só em x/y (mantém a altura z como está, pra bater com a
-      // costura entre camisa/calça e com a borda da peça de verdade)
-      const px = cx + (v.x - cx) * outwardXY;
-      const py = cy + (v.y - cy) * outwardXY;
-      outPositions.push(px, py, v.z);
+      const px = v.x + faceNormal.x * outwardDist;
+      const py = v.y + faceNormal.y * outwardDist;
+      const pz = v.z + faceNormal.z * outwardDist;
+      outPositions.push(px, py, pz);
       if(useCap){
         outUVs.push(...mapUV(region, (v.x - minX) / rangeX, (v.y - minY) / rangeY));
       } else {
@@ -573,19 +582,22 @@ function buildClothingFromRig(innerGroup){
   const parts = classifyRigParts(innerGroup);
 
   const torsoGeo = buildShellFromPart(parts.torso.geometry,
-    { front: REGIONS.torsoFront, back: REGIONS.torsoBack, up: REGIONS.torsoUp, down: REGIONS.torsoDown });
+    { front: REGIONS.torsoFront, back: REGIONS.torsoBack, up: REGIONS.torsoUp, down: REGIONS.torsoDown },
+    { invertV: true });
   const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.userData.isClothing = true;
   torso.visible = shirtLoaded;
 
   const armGeoL = buildShellFromPart(parts.armLeft.geometry,
-    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack, up: REGIONS.rightArmUp, down: REGIONS.rightArmDown });
+    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack, up: REGIONS.rightArmUp, down: REGIONS.rightArmDown },
+    { invertV: false });
   const armL = new THREE.Mesh(armGeoL, armMatL);
   armL.userData.isClothing = true;
   armL.visible = shirtLoaded;
 
   const armGeoR = buildShellFromPart(parts.armRight.geometry,
-    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack, up: REGIONS.leftArmUp, down: REGIONS.leftArmDown });
+    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack, up: REGIONS.leftArmUp, down: REGIONS.leftArmDown },
+    { invertV: false });
   const armR = new THREE.Mesh(armGeoR, armMatR);
   armR.userData.isClothing = true;
   armR.visible = shirtLoaded;
@@ -594,13 +606,15 @@ function buildClothingFromRig(innerGroup){
   // mesma tira do braço, igual já era antes) — sem `up`/`down` o
   // buildShellFromPart cai direto no front/back pra toda a peça.
   const legGeoL = buildShellFromPart(parts.legLeft.geometry,
-    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack });
+    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack },
+    { invertV: false });
   const legL = new THREE.Mesh(legGeoL, pantsMatL);
   legL.userData.isClothing = true;
   legL.visible = pantsLoaded;
 
   const legGeoR = buildShellFromPart(parts.legRight.geometry,
-    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack });
+    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack },
+    { invertV: false });
   const legR = new THREE.Mesh(legGeoR, pantsMatR);
   legR.userData.isClothing = true;
   legR.visible = pantsLoaded;

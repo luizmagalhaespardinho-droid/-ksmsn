@@ -328,24 +328,52 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
   // sempre sai pra fora, não importa a forma.
   const outwardDist = opts.outwardDist ?? 0.035;
   const capFrac = opts.capFrac ?? 0.08;     // % do topo/base tratado como tampa (Up/Down)
+  const worldMatrix = opts.worldMatrix;     // ver nota abaixo
 
   const geo = sourceGeometry.index ? sourceGeometry.toNonIndexed() : sourceGeometry.clone();
   const srcPos = geo.attributes.position;
-  const srcNorm = geo.attributes.normal; // normais suaves originais (ver nota mais abaixo)
+  const srcNorm = geo.attributes.normal; // normais suaves originais (pro sombreamento)
 
-  geo.computeBoundingBox();
-  const bb = geo.boundingBox;
-  const minX = bb.min.x, maxX = bb.max.x;
-  const minY = bb.min.y, maxY = bb.max.y; // eixo de profundidade (frente/costas) no .obj bruto
-  const minZ = bb.min.z, maxZ = bb.max.z; // eixo de altura no .obj bruto
-  const rangeX = (maxX - minX) || 1, rangeY = (maxY - minY) || 1, rangeZ = (maxZ - minZ) || 1;
-  const topCut = maxZ - rangeZ * capFrac, bottomCut = minZ + rangeZ * capFrac;
+  // ---- Posições em espaço de MUNDO (só pra decidir frente/costas/
+  // esquerda/direita e gerar o UV) ----
+  // Antes a gente tentava adivinhar, olhando o .obj bruto, pra que lado
+  // cada eixo (x/y/z) aponta depois do upFix + giro de 180° do rig — e
+  // essa suposição não bateu com a realidade (foi tentativa e erro, e
+  // continuou saindo espelhado). Em vez de adivinhar de novo, pedimos pro
+  // three.js a posição VERDADEIRA de cada vértice já depois de todas as
+  // rotações (`worldMatrix` = matrixWorld do grupo que já tem o upFix,
+  // multiplicado pela transform do rig inteiro). Em espaço de mundo os
+  // eixos são sempre os mesmos, não importa o rig: X = esquerda/direita
+  // da TELA, Y = altura, Z = profundidade (Z maior = mais perto da
+  // câmera, que fica parada em Z positivo olhando pra origem). Isso tira
+  // toda a adivinhação.
+  const worldPos = new Float32Array(srcPos.count * 3);
+  {
+    const wp = new THREE.Vector3();
+    for(let i = 0; i < srcPos.count; i++){
+      wp.fromBufferAttribute(srcPos, i);
+      if(worldMatrix) wp.applyMatrix4(worldMatrix);
+      worldPos[i*3] = wp.x; worldPos[i*3+1] = wp.y; worldPos[i*3+2] = wp.z;
+    }
+  }
+  let minWX = Infinity, maxWX = -Infinity, minWY = Infinity, maxWY = -Infinity, minWZ = Infinity, maxWZ = -Infinity;
+  for(let i = 0; i < worldPos.length; i += 3){
+    const x = worldPos[i], y = worldPos[i+1], z = worldPos[i+2];
+    if(x < minWX) minWX = x; if(x > maxWX) maxWX = x;
+    if(y < minWY) minWY = y; if(y > maxWY) maxWY = y;
+    if(z < minWZ) minWZ = z; if(z > maxWZ) maxWZ = z;
+  }
+  const rangeWX = (maxWX - minWX) || 1, rangeWY = (maxWY - minWY) || 1, rangeWZ = (maxWZ - minWZ) || 1;
+  const midWZ = (minWZ + maxWZ) / 2;
+  const topCutWY = maxWY - rangeWY * capFrac, bottomCutWY = minWY + rangeWY * capFrac;
 
   const outPositions = [];
   const outUVs = [];
   const outNormals = [];
   const va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
   const eab = new THREE.Vector3(), eac = new THREE.Vector3(), faceNormal = new THREE.Vector3();
+  const wa = new THREE.Vector3(), wb = new THREE.Vector3(), wc = new THREE.Vector3();
+  const weab = new THREE.Vector3(), weac = new THREE.Vector3(), faceNormalWorld = new THREE.Vector3();
 
   function mapUV(region, uFrac, vFracBottomToTop){
     const u = region.x0 + THREE.MathUtils.clamp(uFrac, 0, 1) * (region.x1 - region.x0);
@@ -353,10 +381,7 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
     // do corpo (gola/ombro/quadril). No molde, y CRESCE de cima pra baixo
     // da imagem — então "topo do corpo" tem que cair sempre perto de
     // region.y0 (topo da célula) e "base do corpo" perto de region.y1
-    // (base da célula). Essa regra vale igual pro torso, braço e perna —
-    // por isso não existe mais um `invertV` por peça: era esse parâmetro
-    // que fazia manga/calça saírem de ponta-cabeça enquanto o torso ficava
-    // certo (cada um usava uma fórmula diferente pra mesma coisa).
+    // (base da célula). Essa regra vale igual pro torso, braço e perna.
     const vFrac = THREE.MathUtils.clamp(vFracBottomToTop, 0, 1);
     const r = region.y0 + (1 - vFrac) * (region.y1 - region.y0);
     return [u, 1 - r];
@@ -370,55 +395,54 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
     vc.fromBufferAttribute(srcPos, i2);
     eab.subVectors(vb, va); eac.subVectors(vc, va);
     faceNormal.crossVectors(eab, eac).normalize();
-    const centerZ = (va.z + vb.z + vc.z) / 3;
-    const centerY = (va.y + vb.y + vc.y) / 3;
 
-    let region, useCap = false, isBack = false;
+    wa.set(worldPos[i0*3], worldPos[i0*3+1], worldPos[i0*3+2]);
+    wb.set(worldPos[i1*3], worldPos[i1*3+1], worldPos[i1*3+2]);
+    wc.set(worldPos[i2*3], worldPos[i2*3+1], worldPos[i2*3+2]);
+    weab.subVectors(wb, wa); weac.subVectors(wc, wa);
+    faceNormalWorld.crossVectors(weab, weac).normalize();
+    const centerWX = (wa.x + wb.x + wc.x) / 3;
+    const centerWY = (wa.y + wb.y + wc.y) / 3;
+    const centerWZ = (wa.z + wb.z + wc.z) / 3;
+
+    let region, useCap = false, isFront = false;
     const hasCaps = !!(regions.up && regions.down);
-    if(hasCaps && Math.abs(faceNormal.z) > Math.max(Math.abs(faceNormal.y), Math.abs(faceNormal.x)) &&
-       (centerZ >= topCut || centerZ <= bottomCut)){
+    if(hasCaps && Math.abs(faceNormalWorld.y) > Math.max(Math.abs(faceNormalWorld.x), Math.abs(faceNormalWorld.z)) &&
+       (centerWY >= topCutWY || centerWY <= bottomCutWY)){
       useCap = true;
-      region = centerZ >= topCut ? regions.up : regions.down;
+      region = centerWY >= topCutWY ? regions.up : regions.down;
     } else {
-      // y>0 no espaço bruto do .obj é a metade de TRÁS do rig (não a
-      // frente — na prática deu invertido, testado direto no preview).
-      isBack = centerY >= 0;
-      region = isBack ? regions.back : regions.front;
+      // Frente = metade do corpo voltada pra câmera por padrão (Z de
+      // mundo maior = mais perto da câmera, que fica parada olhando de
+      // frente pro boneco).
+      isFront = centerWZ >= midWZ;
+      region = isFront ? regions.front : regions.back;
     }
 
-    [[va, i0], [vb, i1], [vc, i2]].forEach(([v, idx]) => {
+    [[va, wa, i0], [vb, wb, i1], [vc, wc, i2]].forEach(([v, w, idx]) => {
       const px = v.x + faceNormal.x * outwardDist;
       const py = v.y + faceNormal.y * outwardDist;
       const pz = v.z + faceNormal.z * outwardDist;
       outPositions.push(px, py, pz);
       // Normal: copiamos a normal SUAVE original do vértice (do .obj) em
       // vez de recalcular depois de "explodir" a malha em triângulos sem
-      // vértice compartilhado — computeVertexNormals() num non-indexed
-      // não tem vizinho pra suavizar com, então cada triângulo vira uma
-      // faceta plana isolada, e a luz bate diferente em cada uma = as
-      // listras/riscos brancos na camisa e na calça. Copiando a normal
-      // original a superfície volta a ficar lisa, do jeito que o boneco
-      // já era antes de virar roupa.
+      // vértice compartilhado — isso é o que corrigia as listras brancas
+      // de sombreamento faceado.
       if(srcNorm){
         outNormals.push(srcNorm.getX(idx), srcNorm.getY(idx), srcNorm.getZ(idx));
       } else {
         outNormals.push(faceNormal.x, faceNormal.y, faceNormal.z);
       }
       if(useCap){
-        outUVs.push(...mapUV(region, (v.x - minX) / rangeX, (v.y - minY) / rangeY));
+        outUVs.push(...mapUV(region, (w.x - minWX) / rangeWX, (w.z - minWZ) / rangeWZ));
       } else {
-        // FRENTE e COSTAS pedem espelhamentos horizontais opostos (é o
-        // jeito que o próprio molde do Roblox funciona: a célula BACK do
-        // molde já vem "espelhada" em relação à FRONT, porque é assim que
-        // ele desenrola a caixa do avatar). A versão anterior aplicava o
-        // espelhamento na célula errada (front sem espelhar, back
-        // espelhando) — só que, depois do boneco girar 180° pra encarar a
-        // câmera, é exatamente o contrário: quem precisa espelhar é a
-        // FRENTE, e a costas fica direto. Por isso a estampa saía de
-        // ponta-cabeça E ao contrário ao mesmo tempo.
-        const xFrac = (v.x - minX) / rangeX;
-        const uFrac = isBack ? xFrac : (1 - xFrac);
-        outUVs.push(...mapUV(region, uFrac, (v.z - minZ) / rangeZ));
+        // A célula BACK do molde do Roblox já vem "espelhada" em relação
+        // à FRONT (é assim que ele desenrola a caixa do avatar) — por
+        // isso só a costas troca de lado aqui; a frente usa a posição X
+        // de mundo direto, sem espelhar.
+        const xFracWorld = (w.x - minWX) / rangeWX;
+        const uFrac = isFront ? xFracWorld : (1 - xFracWorld);
+        outUVs.push(...mapUV(region, uFrac, (w.y - minWY) / rangeWY));
       }
     });
   }
@@ -605,21 +629,25 @@ function disposeClothingBoxes(){
 // nenhuma coordenada.
 function buildClothingFromRig(innerGroup){
   const parts = classifyRigParts(innerGroup);
+  const worldMatrix = innerGroup.matrixWorld;
 
   const torsoGeo = buildShellFromPart(parts.torso.geometry,
-    { front: REGIONS.torsoFront, back: REGIONS.torsoBack, up: REGIONS.torsoUp, down: REGIONS.torsoDown });
+    { front: REGIONS.torsoFront, back: REGIONS.torsoBack, up: REGIONS.torsoUp, down: REGIONS.torsoDown },
+    { worldMatrix });
   const torso = new THREE.Mesh(torsoGeo, shirtMat);
   torso.userData.isClothing = true;
   torso.visible = shirtLoaded;
 
   const armGeoL = buildShellFromPart(parts.armLeft.geometry,
-    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack, up: REGIONS.rightArmUp, down: REGIONS.rightArmDown });
+    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack, up: REGIONS.rightArmUp, down: REGIONS.rightArmDown },
+    { worldMatrix });
   const armL = new THREE.Mesh(armGeoL, armMatL);
   armL.userData.isClothing = true;
   armL.visible = shirtLoaded;
 
   const armGeoR = buildShellFromPart(parts.armRight.geometry,
-    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack, up: REGIONS.leftArmUp, down: REGIONS.leftArmDown });
+    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack, up: REGIONS.leftArmUp, down: REGIONS.leftArmDown },
+    { worldMatrix });
   const armR = new THREE.Mesh(armGeoR, armMatR);
   armR.userData.isClothing = true;
   armR.visible = shirtLoaded;
@@ -628,13 +656,15 @@ function buildClothingFromRig(innerGroup){
   // mesma tira do braço, igual já era antes) — sem `up`/`down` o
   // buildShellFromPart cai direto no front/back pra toda a peça.
   const legGeoL = buildShellFromPart(parts.legLeft.geometry,
-    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack });
+    { front: REGIONS.rightArmFront, back: REGIONS.rightArmBack },
+    { worldMatrix });
   const legL = new THREE.Mesh(legGeoL, pantsMatL);
   legL.userData.isClothing = true;
   legL.visible = pantsLoaded;
 
   const legGeoR = buildShellFromPart(parts.legRight.geometry,
-    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack });
+    { front: REGIONS.leftArmFront, back: REGIONS.leftArmBack },
+    { worldMatrix });
   const legR = new THREE.Mesh(legGeoR, pantsMatR);
   legR.userData.isClothing = true;
   legR.visible = pantsLoaded;
@@ -678,6 +708,11 @@ async function selectRig(rig){
     rigInstance = template.clone(true);
     tintRig(rigInstance, currentSkin);
     avatarGroup.add(rigInstance);
+    // Atualiza a matriz de mundo AGORA (não espera o próximo frame de
+    // render) — buildClothingFromRig precisa da posição real de cada
+    // vértice já depois do upFix + giro de 180°, pra decidir frente/
+    // costas/esquerda/direita sem adivinhar.
+    avatarGroup.updateMatrixWorld(true);
 
     // innerGroup = grupo com o upFix (mesmo nível dos meshes do corpo)
     const innerGroup = rigInstance.children[0];

@@ -334,7 +334,7 @@ function buildShellFromPart(sourceGeometry, regions, opts = {}){
   // podia empurrar vértice PRA DENTRO em vez de pra fora, cruzando a
   // própria malha e piscando (z-fighting). Deslocar pela normal da face
   // sempre sai pra fora, não importa a forma.
-  const outwardDist = opts.outwardDist ?? 0.035;
+  const outwardDist = opts.outwardDist ?? 0.008;
   const capFrac = opts.capFrac ?? 0.08;     // % do topo/base tratado como tampa (Up/Down)
   const worldMatrix = opts.worldMatrix;     // ver nota abaixo
 
@@ -895,6 +895,21 @@ function loadTextureFromFile(file, onLoad){
   const url = URL.createObjectURL(file);
   new THREE.TextureLoader().load(url, (tex) => {
     tex.colorSpace = THREE.SRGBColorSpace;
+    // Sem isso o three.js usa mipmap automático (padrão), que encolhe a
+    // textura inteira em vários níveis e mistura pixels vizinhos da
+    // IMAGEM TODA — sem noção de que ali existem células separadas do
+    // molde (Front/Back/Up/Side). Cada fronteira entre uma célula colorida
+    // e a área clara ao redor vaza um pouco nesse processo, e como o
+    // boneco tem várias fronteiras (ombro, lateral, braço), a linha branca
+    // aparecia em todas ao mesmo tempo. Desligando mipmap e travando o
+    // filtro em linear simples, a GPU só mistura os poucos pixels vizinhos
+    // no nível original da imagem — bleeding muito menor, sem esse
+    // "halo" branco generalizado.
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
     tex.needsUpdate = true;
     onLoad(tex);
     URL.revokeObjectURL(url);
